@@ -3,15 +3,24 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/livecore/internal/copy"
 	"github.com/livecore/internal/elfcore"
 	"github.com/livecore/internal/proc"
 	"golang.org/x/sys/unix"
+)
+
+// Global slice to track created page files for cleanup
+var (
+	tempPageMutex sync.Mutex
+	tempPageFiles []string
 )
 
 // Config holds the configuration for livecore
@@ -154,6 +163,7 @@ func runLivecore(config *Config) error {
 		fmt.Println("Phase 3: Final stop and delta copy")
 	}
 
+	log.Printf("Starting freeze.")
 	stopStart := time.Now()
 
 	// Freeze all threads
@@ -224,6 +234,9 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to write core file: %w", err)
 	}
 
+	// Clean up temporary page files
+	cleanupTempPageFiles()
+
 	totalTime := time.Since(startTime)
 
 	if config.Verbose {
@@ -257,7 +270,7 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA) error {
 	// Copy only the dirty pages using process_vm_readv
 	// This is the minimal final copy to capture the exact state at freeze time
 	for pageAddr := range currentDirtyPages {
-		if err := copyDirtyPage(config.Pid, pageAddr); err != nil {
+		if err := copyDirtyPage(config.Pid, pageAddr, config.OutputFile); err != nil {
 			// Log but don't fail - some pages might not be readable
 			if config.Verbose {
 				fmt.Printf("Warning: failed to copy page at %x: %v\n", pageAddr, err)
@@ -268,8 +281,8 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA) error {
 	return nil
 }
 
-// copyDirtyPage copies a single dirty page
-func copyDirtyPage(pid int, pageAddr uintptr) error {
+// copyDirtyPage copies a single dirty page to disk
+func copyDirtyPage(pid int, pageAddr uintptr, outputFile string) error {
 	// Get page size
 	pageSize := copy.GetPageSize()
 
@@ -295,11 +308,33 @@ func copyDirtyPage(pid int, pageAddr uintptr) error {
 		return fmt.Errorf("failed to read page at %x: %w", pageAddr, err)
 	}
 
-	// In a real implementation, we would store this data in the core file
-	// For now, we just discard it since we're not actually building the core file yet
-	_ = buffer
+	// Write page to disk to avoid using massive RAM
+	pageFileName := fmt.Sprintf("%s.tmp.page%x", outputFile, pageAddr)
+	if err := os.WriteFile(pageFileName, buffer, 0644); err != nil {
+		return fmt.Errorf("failed to write page file %s: %w", pageFileName, err)
+	}
+
+	// Track the file for cleanup
+	tempPageMutex.Lock()
+	tempPageFiles = append(tempPageFiles, pageFileName)
+	tempPageMutex.Unlock()
 
 	return nil
+}
+
+// cleanupTempPageFiles removes temporary page files
+func cleanupTempPageFiles() {
+	tempPageMutex.Lock()
+	files := slices.Clone(tempPageFiles)
+	tempPageFiles = tempPageFiles[:0] // Clear the slice
+	tempPageMutex.Unlock()
+
+	for _, filename := range files {
+		if err := os.Remove(filename); err != nil {
+			// Log but don't fail - cleanup is best effort
+			fmt.Printf("Warning: failed to remove temp file %s: %v\n", filename, err)
+		}
+	}
 }
 
 // convertThreads converts proc.Thread to elfcore.Thread

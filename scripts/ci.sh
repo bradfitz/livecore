@@ -140,8 +140,9 @@ fi
 
 # Validate the core file with grf - this MUST succeed for CI to pass
 echo "Validating core file with grf..."
-if command -v grf >/dev/null 2>&1; then
-    if grf core ./test/httpserver/httpserver test_httpserver.core; then
+GRF_PATH="$HOME/go/bin/grf"
+if [ -x "$GRF_PATH" ]; then
+    if "$GRF_PATH" core ./test/httpserver/httpserver test_httpserver.core; then
         echo "✅ grf validation successful"
         if [ -f "grf.out" ]; then
             echo "✅ grf.out file created successfully"

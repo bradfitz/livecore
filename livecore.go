@@ -20,7 +20,6 @@ type Config struct {
 	OutputFile     string
 	MaxPasses      int
 	DirtyThreshold float64
-	OnlyAnon       bool
 	Concurrency    int
 	Verbose        bool
 }
@@ -31,7 +30,6 @@ func parseFlags() (*Config, error) {
 
 	flag.IntVar(&config.MaxPasses, "passes", 2, "maximum pre-copy passes")
 	flag.Float64Var(&config.DirtyThreshold, "dirty-thresh", 5.0, "stop when dirty < threshold (percentage)")
-	flag.BoolVar(&config.OnlyAnon, "only-anon", false, "dump only anonymous/private mappings")
 	flag.IntVar(&config.Concurrency, "concurrency", runtime.GOMAXPROCS(0), "concurrent read workers")
 	flag.BoolVar(&config.Verbose, "verbose", false, "show progress and statistics")
 

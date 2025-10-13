@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-// VMAKind represents the type of memory mapping
+// VMAKind represents the type of memory mapping.
 type VMAKind int
 
 const (
@@ -19,7 +20,10 @@ const (
 	VMAShared
 )
 
-// Perm represents memory permissions
+// VMFlag constants
+var vmFlagDD = VMFlag{'d', 'd'} // MADV_DONTDUMP flag
+
+// Perm represents memory permissions.
 type Perm uint8
 
 const (
@@ -28,22 +32,26 @@ const (
 	PermExec  Perm = 1 << 2
 )
 
-// VMA represents a virtual memory area
+// VMFlag represents a single memory advice flag (2 characters).
+type VMFlag [2]byte
+
+// VMA represents a virtual memory area.
 type VMA struct {
-	Start  uintptr
-	End    uintptr
-	Perms  Perm
-	Offset uint64
-	Dev    uint64
-	Inode  uint64
-	Path   string
-	Kind   VMAKind
+	Start   uintptr
+	End     uintptr
+	Perms   Perm
+	Offset  uint64
+	Dev     uint64
+	Inode   uint64
+	Path    string
+	Kind    VMAKind
+	VmFlags []VMFlag // Memory advice flags from smaps
 	// Internal fields for tracking
 	FileOffset uint64 // Offset in core file
 	MemSize    uint64 // Size in core file
 }
 
-// ParseMaps parses /proc/<pid>/maps
+// ParseMaps parses /proc/<pid>/maps.
 func ParseMaps(pid int) ([]VMA, error) {
 	mapsPath := fmt.Sprintf("/proc/%d/maps", pid)
 	file, err := os.Open(mapsPath)
@@ -68,10 +76,23 @@ func ParseMaps(pid int) ([]VMA, error) {
 		return nil, fmt.Errorf("failed to read maps: %w", err)
 	}
 
+	// Parse smaps to get VmFlags for each VMA
+	smapsInfo, err := ParseSMaps(pid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse smaps: %w", err)
+	}
+
+	// Merge VmFlags into VMAs
+	for i := range vmas {
+		if info, ok := smapsInfo[vmas[i].Start]; ok {
+			vmas[i].VmFlags = info.VmFlags
+		}
+	}
+
 	return vmas, nil
 }
 
-// parseMapsLine parses a single line from /proc/<pid>/maps
+// parseMapsLine parses a single line from /proc/<pid>/maps.
 func parseMapsLine(line string) (VMA, error) {
 	parts := strings.Fields(line)
 	if len(parts) < 5 {
@@ -182,7 +203,7 @@ func determineVMAKind(path string, start, end uintptr) VMAKind {
 	return VMAFile
 }
 
-// ParseSMaps parses /proc/<pid>/smaps for additional VMA information
+// ParseSMaps parses /proc/<pid>/smaps for additional VMA information.
 func ParseSMaps(pid int) (map[uintptr]SMapsInfo, error) {
 	smapsPath := fmt.Sprintf("/proc/%d/smaps", pid)
 	file, err := os.Open(smapsPath)
@@ -237,7 +258,7 @@ func ParseSMaps(pid int) (map[uintptr]SMapsInfo, error) {
 	return smapsInfo, nil
 }
 
-// SMapsInfo contains additional information from smaps
+// SMapsInfo contains additional information from smaps.
 type SMapsInfo struct {
 	Size       uint64
 	RSS        uint64
@@ -247,10 +268,10 @@ type SMapsInfo struct {
 	Referenced uint64
 	Anonymous  uint64
 	Swap       uint64
-	VmFlags    string
+	VmFlags    []VMFlag
 }
 
-// parseSMapsProperty parses a single property line from smaps
+// parseSMapsProperty parses a single property line from smaps.
 func parseSMapsProperty(line string, info *SMapsInfo) {
 	parts := strings.Fields(line)
 	if len(parts) < 2 {
@@ -294,11 +315,25 @@ func parseSMapsProperty(line string, info *SMapsInfo) {
 			info.Swap = swap
 		}
 	case "VmFlags:":
-		info.VmFlags = strings.Join(parts[1:], " ")
+		// Parse space-separated 2-character flags
+		info.VmFlags = parseVmFlags(strings.Join(parts[1:], " "))
 	}
 }
 
-// IsDumpable checks if a VMA should be included in the core dump
+// parseVmFlags parses space-separated 2-character flags into VMFlag slice.
+func parseVmFlags(flagsStr string) []VMFlag {
+	parts := strings.Fields(flagsStr)
+	var flags []VMFlag
+	for _, part := range parts {
+		if len(part) == 2 {
+			flags = append(flags, VMFlag{part[0], part[1]})
+		}
+		// Skip flags that aren't exactly 2 characters
+	}
+	return flags
+}
+
+// IsDumpable checks if a VMA should be included in the core dump.
 func (vma *VMA) IsDumpable(includeFileMaps, onlyAnon, respectDontdump bool) bool {
 	// Check if it's anonymous and we only want anonymous
 	if onlyAnon && vma.Kind != VMAAnonymous {
@@ -310,13 +345,17 @@ func (vma *VMA) IsDumpable(includeFileMaps, onlyAnon, respectDontdump bool) bool
 		return false
 	}
 
-	// TODO: Check MADV_DONTDUMP if respectDontdump is true
-	// This would require parsing the VmFlags from smaps
+	// Check MADV_DONTDUMP if respectDontdump is true
+	if respectDontdump {
+		if slices.Contains(vma.VmFlags, vmFlagDD) {
+			return false
+		}
+	}
 
 	return true
 }
 
-// Size returns the size of the VMA
+// Size returns the size of the VMA.
 func (vma *VMA) Size() uint64 {
 	return vma.MemSize
 }

@@ -296,7 +296,7 @@ func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
 func (w *ELFWriter) getDumpableVMAs() []VMA {
 	var dumpable []VMA
 	for _, vma := range w.info.VMAs {
-		if vma.IsDumpable(true, false, true) { // TODO: Use actual flags
+		if vma.IsDumpable() {
 			dumpable = append(dumpable, vma)
 		}
 	}

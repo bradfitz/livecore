@@ -30,7 +30,6 @@ livecore [flags] <pid> <output.core>
 
 - `-passes N`: Maximum pre-copy passes (default: 2)
 - `-dirty-thresh PCT`: Stop when dirty < threshold (default: 5%)
-- `-only-anon`: Dump only anonymous/private mappings
 - `-concurrency N`: Concurrent read workers (default: runtime.GOMAXPROCS)
 - `-verbose`: Show progress and statistics
 

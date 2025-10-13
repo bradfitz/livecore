@@ -2,9 +2,10 @@ package elfcore
 
 import (
 	"debug/elf"
+	"slices"
 )
 
-// VMAKind represents the type of memory mapping
+// VMAKind represents the type of memory mapping.
 type VMAKind int
 
 const (
@@ -15,7 +16,10 @@ const (
 	VMAShared
 )
 
-// Perm represents memory permissions
+// VMFlag constants
+var vmFlagDD = VMFlag{'d', 'd'} // MADV_DONTDUMP flag
+
+// Perm represents memory permissions.
 type Perm uint8
 
 const (
@@ -24,28 +28,32 @@ const (
 	PermExec  Perm = 1 << 2
 )
 
-// VMA represents a virtual memory area
+// VMFlag represents a single memory advice flag (2 characters).
+type VMFlag [2]byte
+
+// VMA represents a virtual memory area.
 type VMA struct {
-	Start  uintptr
-	End    uintptr
-	Perms  Perm
-	Offset uint64
-	Dev    uint64
-	Inode  uint64
-	Path   string
-	Kind   VMAKind
+	Start   uintptr
+	End     uintptr
+	Perms   Perm
+	Offset  uint64
+	Dev     uint64
+	Inode   uint64
+	Path    string
+	Kind    VMAKind
+	VmFlags []VMFlag // Memory advice flags from smaps
 	// Internal fields for tracking
 	FileOffset uint64 // Offset in core file
 	MemSize    uint64 // Size in core file
 }
 
-// Thread represents a thread in the target process
+// Thread represents a thread in the target process.
 type Thread struct {
 	Tid       int
 	Registers []byte // Raw register data
 }
 
-// NoteType represents ELF note types
+// NoteType represents ELF note types.
 type NoteType uint32
 
 const (
@@ -58,14 +66,14 @@ const (
 	NT_FILE     NoteType = 0x46494c45
 )
 
-// Note represents an ELF note
+// Note represents an ELF note.
 type Note struct {
 	Name string
 	Type NoteType
 	Data []byte
 }
 
-// CoreInfo contains all information needed to generate a core file
+// CoreInfo contains all information needed to generate a core file.
 type CoreInfo struct {
 	Pid     int
 	Threads []Thread
@@ -75,7 +83,7 @@ type CoreInfo struct {
 	FileTable []FileEntry
 }
 
-// FileEntry represents a file in the NT_FILE note
+// FileEntry represents a file in the NT_FILE note.
 type FileEntry struct {
 	Start   uintptr
 	End     uintptr
@@ -95,30 +103,23 @@ const (
 	PT_LOAD     = 1
 )
 
-// GetELFMachine returns the ELF machine type for the current architecture
+// GetELFMachine returns the ELF machine type for the current architecture.
 func GetELFMachine() uint16 {
 	// x86-64
 	return uint16(elf.EM_X86_64)
 }
 
-// IsDumpable returns true if the VMA should be included in the core dump
-func (vma *VMA) IsDumpable(includeFileMaps, onlyAnon, respectDontdump bool) bool {
-	// Check if it's anonymous and we only want anonymous
-	if onlyAnon && vma.Kind != VMAAnonymous {
+// IsDumpable returns true if the VMA should be included in the core dump.
+func (vma *VMA) IsDumpable() bool {
+	// Check for MADV_DONTDUMP flag
+	if slices.Contains(vma.VmFlags, vmFlagDD) {
 		return false
 	}
-
-	// Check if it's file-backed and we don't want file maps
-	if !includeFileMaps && vma.Kind == VMAFile {
-		return false
-	}
-
-	// TODO: Check MADV_DONTDUMP if respectDontdump is true
 
 	return true
 }
 
-// Size returns the size of the VMA
+// Size returns the size of the VMA.
 func (vma *VMA) Size() uint64 {
 	return vma.MemSize
 }

@@ -40,10 +40,18 @@ livecore [flags] <pid> <output.core>
 - `-page-size SIZE`: Override page size (auto-detected by default)
 - `-verbose`: Show progress and statistics
 
-## Building
+## Installation
 
 ```bash
-go build -o livecore ./cmd/livecore
+go install github.com/bradfitz/livecore@main
+```
+
+## Building from Source
+
+```bash
+git clone https://github.com/bradfitz/livecore.git
+cd livecore
+go build -o livecore .
 ```
 
 ## Testing

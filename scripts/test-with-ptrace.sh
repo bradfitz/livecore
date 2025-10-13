@@ -11,7 +11,7 @@ echo "✅ Ptrace scope set to: $(cat /proc/sys/kernel/yama/ptrace_scope)"
 
 # Build livecore
 echo "Building livecore..."
-go build -o livecore ./cmd/livecore
+go build -o livecore .
 
 # Build HTTP server
 echo "Building HTTP server..."

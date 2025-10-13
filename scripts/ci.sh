@@ -61,7 +61,7 @@ fi
 
 # Build
 echo "Building livecore..."
-go build -o livecore ./cmd/livecore
+go build -o livecore .
 
 # Check if binary was created
 if [ ! -f "livecore" ]; then

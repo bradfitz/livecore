@@ -27,7 +27,7 @@ go vet ./...
 go fmt -l . | grep -q . && (echo "Code not formatted"; exit 1) || true
 go mod tidy
 go test ./...
-go build -o livecore ./cmd/livecore
+go build -o livecore .
 
 # Test livecore help (this should always work)
 echo "Testing livecore help..."

@@ -9,11 +9,11 @@ import (
 type VMAKind int
 
 const (
-	VMAAnonymous VMAKind = iota
-	VMAFile
-	VMAHeap
-	VMAStack
-	VMAShared
+	VMAAnonymous VMAKind = 0
+	VMAFile      VMAKind = 1
+	VMAHeap      VMAKind = 2
+	VMAStack     VMAKind = 3
+	VMAShared    VMAKind = 4
 )
 
 // VMFlag constants

@@ -99,3 +99,4 @@ rm -f test/httpserver/httpserver test_httpserver.core grf.out
 
 echo "🎉 All tests passed! livecore is working correctly."
 echo "⚠️  Remember to re-enable security: sudo sysctl kernel.yama.ptrace_scope=1"
+

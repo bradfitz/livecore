@@ -26,6 +26,9 @@ func main() {
 	fmt.Printf("HTTP Server PID: %d\n", os.Getpid())
 	fmt.Printf("Starting HTTP server on port %s\n", port)
 
+	// Start memory waster goroutine early
+	go wasteMemory()
+
 	// Allocate some memory to make the core dump interesting
 	allocateMemory()
 
@@ -155,4 +158,18 @@ func memoryAllocator() {
 
 		fmt.Printf("Allocated new chunk, total chunks: %d\n", len(memoryPool))
 	}
+}
+
+func wasteMemory() {
+	var wasted [][]byte
+	defer func() {
+		fmt.Printf("wasteMemory goroutine allocated %d chunks\n", len(wasted))
+	}()
+
+	for range 1000 {
+		wasted = append(wasted, make([]byte, 1000))
+	}
+
+	// Keep the goroutine alive and prevent GC
+	select {}
 }

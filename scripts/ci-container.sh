@@ -97,3 +97,4 @@ rm -f test/httpserver/httpserver test_httpserver.core grf.out
 
 echo "✅ Container-aware CI completed"
 echo "   Note: Full ptrace functionality requires proper capabilities"
+

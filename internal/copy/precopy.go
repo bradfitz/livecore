@@ -2,8 +2,10 @@ package copy
 
 import (
 	"fmt"
-	"sync"
+	"os"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // PreCopyEngine handles iterative pre-copy with soft-dirty tracking
@@ -44,23 +46,106 @@ func NewPageMap(pid int) *PageMap {
 
 // ClearSoftDirty clears the soft-dirty bits for the process
 func (pm *PageMap) ClearSoftDirty() error {
-	// This would call the actual clear_refs implementation
-	// For now, just return nil
+	clearRefsPath := fmt.Sprintf("/proc/%d/clear_refs", pm.pid)
+	file, err := os.OpenFile(clearRefsPath, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open clear_refs: %w", err)
+	}
+	defer file.Close()
+
+	// Write "4" to clear soft-dirty bits
+	if _, err := file.WriteString("4\n"); err != nil {
+		return fmt.Errorf("failed to clear soft-dirty bits: %w", err)
+	}
+
 	return nil
 }
 
 // GetDirtyPages reads the pagemap to find dirty pages
 func (pm *PageMap) GetDirtyPages(vmas []VMA) (map[uintptr]bool, error) {
-	// This would call the actual pagemap implementation
-	// For now, return empty map
-	return make(map[uintptr]bool), nil
+	dirtyPages := make(map[uintptr]bool)
+
+	for _, vma := range vmas {
+		if err := pm.scanVMAForDirtyPages(vma, dirtyPages); err != nil {
+			return nil, fmt.Errorf("failed to scan VMA %x-%x: %w", vma.Start, vma.End, err)
+		}
+	}
+
+	return dirtyPages, nil
+}
+
+// scanVMAForDirtyPages scans a VMA for dirty pages
+func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool) error {
+	pagemapPath := fmt.Sprintf("/proc/%d/pagemap", pm.pid)
+	file, err := os.Open(pagemapPath)
+	if err != nil {
+		return fmt.Errorf("failed to open pagemap: %w", err)
+	}
+	defer file.Close()
+
+	// Calculate page-aligned start and end
+	start := vma.Start &^ uintptr(pm.pageSize-1)
+	end := (vma.End + uintptr(pm.pageSize-1)) &^ uintptr(pm.pageSize-1)
+
+	// Read pagemap entries for this VMA
+	for addr := start; addr < end; addr += uintptr(pm.pageSize) {
+		if err := pm.checkPageDirty(file, addr, dirtyPages); err != nil {
+			return fmt.Errorf("failed to check page at %x: %w", addr, err)
+		}
+	}
+
+	return nil
+}
+
+// checkPageDirty checks if a specific page is dirty
+func (pm *PageMap) checkPageDirty(file *os.File, addr uintptr, dirtyPages map[uintptr]bool) error {
+	// Calculate pagemap entry offset
+	// Each pagemap entry is 8 bytes and represents one page
+	entryOffset := int64(addr / uintptr(pm.pageSize) * 8)
+
+	// Read the pagemap entry
+	var entry [8]byte
+	n, err := file.ReadAt(entry[:], entryOffset)
+	if err != nil {
+		// Skip pages that can't be read (like vsyscall, etc.)
+		if err == os.ErrNotExist || n == 0 {
+			return nil
+		}
+		return fmt.Errorf("failed to read pagemap entry: %w", err)
+	}
+
+	// Parse the entry
+	// Bit 55 is the soft-dirty bit
+	entryValue := uint64(entry[0]) | uint64(entry[1])<<8 | uint64(entry[2])<<16 | uint64(entry[3])<<24 |
+		uint64(entry[4])<<32 | uint64(entry[5])<<40 | uint64(entry[6])<<48 | uint64(entry[7])<<56
+	softDirty := (entryValue & (1 << 55)) != 0
+
+	if softDirty {
+		dirtyPages[addr] = true
+	}
+
+	return nil
 }
 
 // CalculateDirtyRatio calculates the ratio of dirty pages
 func (pm *PageMap) CalculateDirtyRatio(vmas []VMA) (float64, error) {
-	// This would call the actual pagemap implementation
-	// For now, return 0
-	return 0, nil
+	dirtyPages, err := pm.GetDirtyPages(vmas)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get dirty pages: %w", err)
+	}
+
+	totalPages := 0
+	for _, vma := range vmas {
+		pages := int((vma.End - vma.Start + uintptr(pm.pageSize-1)) / uintptr(pm.pageSize))
+		totalPages += pages
+	}
+
+	if totalPages == 0 {
+		return 0, nil
+	}
+
+	dirtyCount := len(dirtyPages)
+	return float64(dirtyCount) / float64(totalPages), nil
 }
 
 // VMA represents a virtual memory area
@@ -168,27 +253,14 @@ func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 
 // copyAllPages copies all pages in the given VMAs
 func (pce *PreCopyEngine) copyAllPages(vmas []VMA) error {
-	var wg sync.WaitGroup
-	errorChan := make(chan error, len(vmas))
-
-	for _, vma := range vmas {
-		wg.Add(1)
-		go func(v VMA) {
-			defer wg.Done()
-
-			if err := pce.copyVMA(v); err != nil {
-				errorChan <- fmt.Errorf("failed to copy VMA %x-%x: %w", v.Start, v.End, err)
-			}
-		}(vma)
+	if pce.verbose {
+		fmt.Printf("Copying %d VMAs using process_vm_readv\n", len(vmas))
 	}
 
-	wg.Wait()
-	close(errorChan)
-
-	// Check for errors
-	for err := range errorChan {
-		if err != nil {
-			return err
+	// Copy each VMA using process_vm_readv
+	for _, vma := range vmas {
+		if err := pce.copyVMA(vma); err != nil {
+			return fmt.Errorf("failed to copy VMA %x-%x: %w", vma.Start, vma.End, err)
 		}
 	}
 
@@ -199,27 +271,42 @@ func (pce *PreCopyEngine) copyAllPages(vmas []VMA) error {
 func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 	// Calculate page-aligned boundaries
 	pageSize := uint64(GetPageSize())
-	start := vma.Start &^ uintptr(pageSize-1)
-	end := (vma.End + uintptr(pageSize-1)) &^ uintptr(pageSize-1)
+	start := uint64(vma.Start) &^ (pageSize - 1)
+	end := (uint64(vma.End) + pageSize - 1) &^ (pageSize - 1)
 
-	// Copy pages
-	for addr := start; addr < end; addr += uintptr(pageSize) {
-		// Submit job to worker pool
-		job := Job{
-			VMA:    vma,
-			Offset: uint64(addr - vma.Start),
-			Size:   pageSize,
+	// Copy pages in chunks to avoid too many syscalls
+	chunkSize := uint64(1024 * 1024) // 1MB chunks
+	for addr := start; addr < end; addr += chunkSize {
+		remaining := end - addr
+		if remaining < chunkSize {
+			chunkSize = remaining
 		}
 
-		pce.workerPool.Submit(job)
-	}
+		// Create local buffer
+		buffer := make([]byte, chunkSize)
 
-	// Collect results
-	for i := 0; i < int((end-start)/uintptr(pageSize)); i++ {
-		result := pce.workerPool.GetResult()
-		if result.Error != nil {
-			return result.Error
+		// Use process_vm_readv to copy memory
+		localIovec := unix.Iovec{
+			Base: &buffer[0],
+			Len:  chunkSize,
 		}
+		remoteIovec := unix.RemoteIovec{
+			Base: uintptr(addr),
+			Len:  int(chunkSize),
+		}
+
+		_, err := unix.ProcessVMReadv(pce.pid, []unix.Iovec{localIovec}, []unix.RemoteIovec{remoteIovec}, 0)
+		if err != nil {
+			// Skip pages that can't be read (like vsyscall, etc.)
+			if err == unix.ENOENT || err == unix.EFAULT {
+				continue
+			}
+			return fmt.Errorf("failed to read memory at %x: %w", addr, err)
+		}
+
+		// Store the copied data (for now, just discard it)
+		// In a real implementation, this would be stored in a staging area
+		_ = buffer
 	}
 
 	return nil

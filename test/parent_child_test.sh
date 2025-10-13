@@ -52,3 +52,4 @@ fi
 # Clean up
 kill $SERVER_PID 2>/dev/null || true
 rm -f test_parent_child.core grf.out
+

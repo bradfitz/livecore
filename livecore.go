@@ -199,12 +199,18 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to copy remaining dirty pages: %w", err)
 	}
 
+	// Unfreeze threads immediately after final delta copy
+	// The core file writing can take a long time, so we don't want to keep
+	// the target process frozen during that time
+	if err := proc.UnfreezeAllThreads(frozenThreads); err != nil {
+		return fmt.Errorf("failed to unfreeze threads: %w", err)
+	}
+
 	stopTime := time.Since(stopStart)
 
 	if config.Verbose {
 		fmt.Printf("Stop time: %v\n", stopTime)
 	}
-
 	// Phase 4: Generate ELF core file
 	if config.Verbose {
 		fmt.Println("Phase 4: Generate ELF core file")
@@ -220,7 +226,6 @@ func runLivecore(config *Config) error {
 	// Create notes
 	notes, err := elfcore.CreateCoreNotes(config.Pid, coreInfo.Threads, coreInfo.FileTable)
 	if err != nil {
-		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to create notes: %w", err)
 	}
 
@@ -229,19 +234,12 @@ func runLivecore(config *Config) error {
 	// Write ELF core file
 	elfWriter, err := elfcore.NewELFWriter(config.OutputFile, coreInfo)
 	if err != nil {
-		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to create ELF writer: %w", err)
 	}
 	defer elfWriter.Close()
 
 	if err := elfWriter.WriteCore(); err != nil {
-		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to write core file: %w", err)
-	}
-
-	// Unfreeze threads
-	if err := proc.UnfreezeAllThreads(frozenThreads); err != nil {
-		return fmt.Errorf("failed to unfreeze threads: %w", err)
 	}
 
 	totalTime := time.Since(startTime)

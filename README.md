@@ -30,14 +30,8 @@ livecore [flags] <pid> <output.core>
 
 - `-passes N`: Maximum pre-copy passes (default: 2)
 - `-dirty-thresh PCT`: Stop when dirty < threshold (default: 5%)
-- `-include-file-maps`: Dump private file-backed bytes (default: true)
 - `-only-anon`: Dump only anonymous/private mappings
-- `-respect-dontdump`: Honor MADV_DONTDUMP (default: true)
-- `-notes all|minimal`: Which PT_NOTE sets to include (default: all)
-- `-freeze method`: ptrace|cgroup (default: ptrace)
 - `-concurrency N`: Concurrent read workers (default: runtime.GOMAXPROCS)
-- `-iov-bytes SIZE`: Per-process_vm_readv batch size (default: 8MB)
-- `-page-size SIZE`: Override page size (auto-detected by default)
 - `-verbose`: Show progress and statistics
 
 ## Installation

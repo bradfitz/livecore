@@ -16,19 +16,13 @@ import (
 
 // Config holds the configuration for livecore
 type Config struct {
-	Pid             int
-	OutputFile      string
-	MaxPasses       int
-	DirtyThreshold  float64
-	IncludeFileMaps bool
-	OnlyAnon        bool
-	RespectDontdump bool
-	Notes           string
-	FreezeMethod    string
-	Concurrency     int
-	IOVBytes        int64
-	PageSize        int
-	Verbose         bool
+	Pid            int
+	OutputFile     string
+	MaxPasses      int
+	DirtyThreshold float64
+	OnlyAnon       bool
+	Concurrency    int
+	Verbose        bool
 }
 
 // parseFlags parses command line flags
@@ -37,14 +31,8 @@ func parseFlags() (*Config, error) {
 
 	flag.IntVar(&config.MaxPasses, "passes", 2, "maximum pre-copy passes")
 	flag.Float64Var(&config.DirtyThreshold, "dirty-thresh", 5.0, "stop when dirty < threshold (percentage)")
-	flag.BoolVar(&config.IncludeFileMaps, "include-file-maps", true, "dump private file-backed bytes")
 	flag.BoolVar(&config.OnlyAnon, "only-anon", false, "dump only anonymous/private mappings")
-	flag.BoolVar(&config.RespectDontdump, "respect-dontdump", true, "honor MADV_DONTDUMP")
-	flag.StringVar(&config.Notes, "notes", "all", "which PT_NOTE sets to include (all|minimal)")
-	flag.StringVar(&config.FreezeMethod, "freeze", "ptrace", "freeze method (ptrace|cgroup)")
 	flag.IntVar(&config.Concurrency, "concurrency", runtime.GOMAXPROCS(0), "concurrent read workers")
-	flag.Int64Var(&config.IOVBytes, "iov-bytes", 8*1024*1024, "per-process_vm_readv batch size")
-	flag.IntVar(&config.PageSize, "page-size", 0, "override page size (0 for auto-detect)")
 	flag.BoolVar(&config.Verbose, "verbose", false, "show progress and statistics")
 
 	flag.Parse()
@@ -74,10 +62,6 @@ func parseFlags() (*Config, error) {
 
 	if config.Concurrency < 1 {
 		return nil, fmt.Errorf("concurrency must be >= 1")
-	}
-
-	if config.IOVBytes < 4096 {
-		return nil, fmt.Errorf("iov-bytes must be >= 4096")
 	}
 
 	// Convert percentage to ratio

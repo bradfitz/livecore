@@ -137,9 +137,9 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to get auxv: %w", err)
 	}
 
-	// Phase 2: Pre-copy (if enabled)
+	// Phase 2: Pre-copy (if enabled) - DISABLED for now due to deadlock
 	var dirtyPages map[uintptr]bool
-	if config.MaxPasses > 0 {
+	if false && config.MaxPasses > 0 {
 		if config.Verbose {
 			fmt.Println("Phase 2: Pre-copy")
 		}

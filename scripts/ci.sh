@@ -82,4 +82,110 @@ ls -la livecore
 echo "Testing help output..."
 ./livecore -h
 
+# Test with HTTP server
+echo "Testing with HTTP server..."
+cd test/httpserver
+
+# Build the HTTP server
+echo "Building HTTP server test program..."
+go build -o httpserver .
+
+# Find an available port
+PORT=8081
+while netstat -ln 2>/dev/null | grep -q ":$PORT "; do
+    PORT=$((PORT + 1))
+done
+
+# Start the HTTP server in the background
+echo "Starting HTTP server on port $PORT..."
+./httpserver $PORT &
+SERVER_PID=$!
+
+# Wait for server to start with proper polling
+echo "Waiting for server to start..."
+for i in {1..30}; do
+    if curl -s http://127.0.0.1:$PORT/status >/dev/null 2>&1; then
+        echo "HTTP server is responsive"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo "Error: HTTP server not responding after 30 attempts"
+        kill $SERVER_PID 2>/dev/null || true
+        exit 1
+    fi
+    sleep 0.1
+done
+
+# Run livecore against the HTTP server
+echo "Running livecore against HTTP server..."
+cd ../..
+
+# Check if server is still running
+if ! kill -0 $SERVER_PID 2>/dev/null; then
+    echo "Error: HTTP server process died before core dump"
+    exit 1
+fi
+
+# Run livecore - this MUST succeed for CI to pass
+echo "Running livecore against HTTP server..."
+if ./livecore -verbose -passes 2 -dirty-thresh 10 $SERVER_PID test_httpserver.core; then
+    echo "✅ livecore completed successfully"
+    CORE_DUMP_SUCCESS=true
+else
+    echo "❌ livecore FAILED - this is a CI failure"
+    echo "Core dump generation is a critical requirement"
+    kill $SERVER_PID 2>/dev/null || true
+    exit 1
+fi
+
+# Validate the core file with grf - this MUST succeed for CI to pass
+echo "Validating core file with grf..."
+if command -v grf >/dev/null 2>&1; then
+    if grf core ./test/httpserver/httpserver test_httpserver.core; then
+        echo "✅ grf validation successful"
+        if [ -f "grf.out" ]; then
+            echo "✅ grf.out file created successfully"
+            ls -la grf.out
+        else
+            echo "❌ grf.out file not found - this is a CI failure"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+        fi
+    else
+        echo "❌ grf validation FAILED - this is a CI failure"
+        echo "Core file validation is a critical requirement"
+        kill $SERVER_PID 2>/dev/null || true
+        exit 1
+    fi
+else
+    echo "❌ grf tool not available - this is a CI failure"
+    echo "grf tool is required for core file validation"
+    kill $SERVER_PID 2>/dev/null || true
+    exit 1
+fi
+
+# Verify the HTTP server is still running and responsive
+echo "Verifying HTTP server is still running..."
+if kill -0 $SERVER_PID 2>/dev/null; then
+    echo "HTTP server process is still running"
+    
+    # Test server responsiveness again
+    if curl -s http://127.0.0.1:$PORT/status >/dev/null; then
+        echo "HTTP server is still responsive after core dump"
+    else
+        echo "Warning: HTTP server not responding after core dump"
+    fi
+else
+    echo "Error: HTTP server process died during core dump"
+    exit 1
+fi
+
+# Clean up
+echo "Cleaning up test processes..."
+kill $SERVER_PID 2>/dev/null || true
+rm -f test/httpserver/httpserver test_httpserver.core grf.out
+
+# Report final status
+echo "✅ All core dump tests completed successfully"
+
 echo "All CI checks passed!"

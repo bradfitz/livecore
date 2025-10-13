@@ -74,12 +74,8 @@ func FreezeThread(tid int) error {
 
 // UnfreezeThread unfreezes a thread using ptrace
 func UnfreezeThread(tid int) error {
-	// PTRACE_CONT to resume the thread
-	if err := unix.PtraceCont(tid, 0); err != nil {
-		return fmt.Errorf("failed to continue thread %d: %w", tid, err)
-	}
-
-	// PTRACE_DETACH to detach from the thread
+	// For seized threads, we can detach directly without resuming
+	// PTRACE_DETACH will automatically resume the thread and detach
 	if err := unix.PtraceDetach(tid); err != nil {
 		return fmt.Errorf("failed to detach from thread %d: %w", tid, err)
 	}

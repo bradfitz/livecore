@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bradfitz/livecore/internal/buffer"
 	"golang.org/x/sys/unix"
 )
 
@@ -15,17 +16,19 @@ type PreCopyEngine struct {
 	dirtyThreshold float64
 	pageMap        *PageMap
 	workerPool     *WorkerPool
+	bufferManager  *buffer.Manager
 	verbose        bool
 }
 
 // NewPreCopyEngine creates a new pre-copy engine
-func NewPreCopyEngine(pid int, maxPasses int, dirtyThreshold float64, workers int, verbose bool) *PreCopyEngine {
+func NewPreCopyEngine(pid int, maxPasses int, dirtyThreshold float64, workers int, bufferManager *buffer.Manager, verbose bool) *PreCopyEngine {
 	return &PreCopyEngine{
 		pid:            pid,
 		maxPasses:      maxPasses,
 		dirtyThreshold: dirtyThreshold,
 		pageMap:        NewPageMap(pid),
 		workerPool:     NewWorkerPool(workers),
+		bufferManager:  bufferManager,
 		verbose:        verbose,
 	}
 }
@@ -304,27 +307,15 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 			return fmt.Errorf("failed to read memory at %x: %w", addr, err)
 		}
 
-		// Store the memory data to disk for later use in core file generation
-		// Write each page to a temporary file
-		pageSize := uint64(GetPageSize())
-		for pageOffset := uint64(0); pageOffset < chunkSize; pageOffset += pageSize {
-			pageAddr := uintptr(addr + pageOffset)
-			pageEnd := pageOffset + pageSize
-			if pageEnd > chunkSize {
-				pageEnd = chunkSize
-			}
+		// Store the memory data in the BufferManager
+		// Get the offset for this VMA region in the temp file
+		vmaOffset := pce.bufferManager.GetOffsetForVMA(uint64(vma.Start), uint64(vma.End-vma.Start))
 
-			// Write this page to disk using the same naming convention as copyDirtyPage
-			// This will be read by the ELF writer later
-			pageFileName := fmt.Sprintf("temp_page_%x", pageAddr)
-			if err := os.WriteFile(pageFileName, buffer[pageOffset:pageEnd], 0644); err != nil {
-				return fmt.Errorf("failed to write page file %s: %w", pageFileName, err)
-			}
+		// Write the chunk data directly to the BufferManager
+		chunkOffset := vmaOffset + (addr - start)
+		if err := pce.bufferManager.WriteData(chunkOffset, buffer); err != nil {
+			return fmt.Errorf("failed to write data to buffer manager: %w", err)
 		}
-
-		// Store the copied data (for now, just discard it)
-		// In a real implementation, this would be stored in a staging area
-		_ = buffer
 	}
 
 	return nil

@@ -6,22 +6,17 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"slices"
 	"strconv"
-	"sync"
 	"time"
 
-	"github.com/livecore/internal/copy"
-	"github.com/livecore/internal/elfcore"
-	"github.com/livecore/internal/proc"
+	"github.com/bradfitz/livecore/internal/buffer"
+	"github.com/bradfitz/livecore/internal/copy"
+	"github.com/bradfitz/livecore/internal/elfcore"
+	"github.com/bradfitz/livecore/internal/proc"
 	"golang.org/x/sys/unix"
 )
 
-// Global slice to track created page files for cleanup
-var (
-	tempPageMutex sync.Mutex
-	tempPageFiles []string
-)
+// Note: Old temp file management removed - now using BufferManager
 
 // Config holds the configuration for livecore
 type Config struct {
@@ -98,6 +93,13 @@ func runLivecore(config *Config) error {
 
 	startTime := time.Now()
 
+	// Create BufferManager for efficient memory buffering
+	bufferManager, err := buffer.NewBufferManager(config.OutputFile)
+	if err != nil {
+		return fmt.Errorf("failed to create buffer manager: %w", err)
+	}
+	defer bufferManager.Close()
+
 	// Phase 1: Discovery
 	if config.Verbose {
 		fmt.Println("Phase 1: Discovery")
@@ -143,6 +145,7 @@ func runLivecore(config *Config) error {
 			config.MaxPasses,
 			config.DirtyThreshold,
 			config.Concurrency,
+			bufferManager,
 			config.Verbose,
 		)
 
@@ -186,7 +189,7 @@ func runLivecore(config *Config) error {
 	}
 
 	// Copy remaining dirty pages (re-scan after freeze to get current dirty state)
-	if err := copyRemainingDirtyPages(config, finalVMAs); err != nil {
+	if err := copyRemainingDirtyPages(config, finalVMAs, bufferManager); err != nil {
 		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to copy remaining dirty pages: %w", err)
 	}
@@ -224,7 +227,7 @@ func runLivecore(config *Config) error {
 	coreInfo.Notes = notes
 
 	// Write ELF core file
-	elfWriter, err := elfcore.NewELFWriter(config.OutputFile, coreInfo)
+	elfWriter, err := elfcore.NewELFWriter(config.OutputFile, coreInfo, bufferManager)
 	if err != nil {
 		return fmt.Errorf("failed to create ELF writer: %w", err)
 	}
@@ -234,8 +237,7 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to write core file: %w", err)
 	}
 
-	// Clean up temporary page files
-	cleanupTempPageFiles()
+	// Note: No temp files to clean up - using BufferManager
 
 	totalTime := time.Since(startTime)
 
@@ -249,7 +251,7 @@ func runLivecore(config *Config) error {
 // copyRemainingDirtyPages copies the remaining dirty pages after freeze
 // This is the final delta copy - we only copy pages that are still dirty
 // after the process has been frozen, ensuring we capture the final state
-func copyRemainingDirtyPages(config *Config, vmas []proc.VMA) error {
+func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buffer.Manager) error {
 	if config.Verbose {
 		fmt.Println("Copying remaining dirty pages...")
 	}
@@ -269,7 +271,7 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA) error {
 		fmt.Printf("Found %d dirty pages to copy\n", len(currentDirtyPages))
 	}
 	for pageAddr := range currentDirtyPages {
-		if err := copyDirtyPage(config.Pid, pageAddr, config.OutputFile); err != nil {
+		if err := copyDirtyPage(config.Pid, pageAddr, bufferManager); err != nil {
 			// Log but don't fail - some pages might not be readable
 			if config.Verbose {
 				fmt.Printf("Warning: failed to copy page at %x: %v\n", pageAddr, err)
@@ -280,8 +282,8 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA) error {
 	return nil
 }
 
-// copyDirtyPage copies a single dirty page to disk
-func copyDirtyPage(pid int, pageAddr uintptr, outputFile string) error {
+// copyDirtyPage copies a single dirty page to the BufferManager
+func copyDirtyPage(pid int, pageAddr uintptr, bufferManager *buffer.Manager) error {
 	// Get page size
 	pageSize := copy.GetPageSize()
 
@@ -307,34 +309,17 @@ func copyDirtyPage(pid int, pageAddr uintptr, outputFile string) error {
 		return fmt.Errorf("failed to read page at %x: %w", pageAddr, err)
 	}
 
-	// Write page to disk to avoid using massive RAM
-	pageFileName := fmt.Sprintf("%s.tmp.page%x", outputFile, pageAddr)
-	if err := os.WriteFile(pageFileName, buffer, 0644); err != nil {
-		return fmt.Errorf("failed to write page file %s: %w", pageFileName, err)
+	// Write page to BufferManager
+	// Get the offset for this page in the temp file
+	pageOffset := bufferManager.GetOffsetForVMA(uint64(pageAddr), uint64(pageSize))
+	if err := bufferManager.WriteData(pageOffset, buffer); err != nil {
+		return fmt.Errorf("failed to write page to buffer manager: %w", err)
 	}
-
-	// Track the file for cleanup
-	tempPageMutex.Lock()
-	tempPageFiles = append(tempPageFiles, pageFileName)
-	tempPageMutex.Unlock()
 
 	return nil
 }
 
-// cleanupTempPageFiles removes temporary page files
-func cleanupTempPageFiles() {
-	tempPageMutex.Lock()
-	files := slices.Clone(tempPageFiles)
-	tempPageFiles = tempPageFiles[:0] // Clear the slice
-	tempPageMutex.Unlock()
-
-	for _, filename := range files {
-		if err := os.Remove(filename); err != nil {
-			// Log but don't fail - cleanup is best effort
-			fmt.Printf("Warning: failed to remove temp file %s: %v\n", filename, err)
-		}
-	}
-}
+// Note: cleanupTempPageFiles removed - no longer using temp files
 
 // convertThreads converts proc.Thread to elfcore.Thread
 func convertThreads(threads []proc.Thread) []elfcore.Thread {

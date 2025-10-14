@@ -6,29 +6,31 @@ import (
 	"fmt"
 	"os"
 
-	"golang.org/x/sys/unix"
+	"github.com/bradfitz/livecore/internal/buffer"
 )
 
 // ELFWriter handles writing ELF core files
 type ELFWriter struct {
-	file       *os.File
-	offset     uint64
-	info       *CoreInfo
-	outputFile string // Base output file path for finding temp page files
+	file          *os.File
+	offset        uint64
+	info          *CoreInfo
+	outputFile    string // Base output file path for finding temp page files
+	bufferManager *buffer.Manager
 }
 
 // NewELFWriter creates a new ELF core file writer
-func NewELFWriter(filename string, info *CoreInfo) (*ELFWriter, error) {
+func NewELFWriter(filename string, info *CoreInfo, bufferManager *buffer.Manager) (*ELFWriter, error) {
 	file, err := os.Create(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create core file: %w", err)
 	}
 
 	return &ELFWriter{
-		file:       file,
-		offset:     0,
-		info:       info,
-		outputFile: filename,
+		file:          file,
+		offset:        0,
+		info:          info,
+		outputFile:    filename,
+		bufferManager: bufferManager,
 	}, nil
 }
 
@@ -290,56 +292,40 @@ func (w *ELFWriter) writeLoadSegments(segments []LoadSegment) error {
 
 // writeLoadSegment writes a single PT_LOAD segment
 func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
-	// Read memory data from the temporary page files
+	// Read memory data from the BufferManager
 	data, err := w.readMemoryData(segment.VMA)
 	if err != nil {
 		return fmt.Errorf("failed to read memory data for VMA %x-%x: %w",
 			segment.VMA.Start, segment.VMA.End, err)
 	}
 
+	// Write the data to the ELF file
 	_, err = w.file.WriteAt(data, int64(segment.Offset))
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Punch hole in the BufferManager to free disk space
+	// Get the offset for this VMA in the BufferManager
+	vmaOffset := w.bufferManager.GetOffsetForVMA(uint64(segment.VMA.Start), segment.VMA.Size())
+	if err := w.bufferManager.PunchHole(vmaOffset, segment.VMA.Size()); err != nil {
+		// Log but don't fail - hole punching is best effort
+		fmt.Printf("Warning: failed to punch hole for VMA %x-%x: %v\n",
+			segment.VMA.Start, segment.VMA.End, err)
+	}
+
+	return nil
 }
 
-// readMemoryData reads memory data for a VMA directly from the process
+// readMemoryData reads memory data for a VMA from the BufferManager
 func (w *ELFWriter) readMemoryData(vma VMA) ([]byte, error) {
-	// Create a buffer for the entire VMA
-	data := make([]byte, vma.Size())
+	// Get the offset for this VMA in the BufferManager
+	vmaOffset := w.bufferManager.GetOffsetForVMA(uint64(vma.Start), vma.Size())
 
-	// Read memory directly from the process using process_vm_readv
-	// This is more reliable than trying to read from temporary files
-	chunkSize := uint64(1024 * 1024) // 1MB chunks
-	for offset := uint64(0); offset < vma.Size(); offset += chunkSize {
-		remaining := vma.Size() - offset
-		if remaining < chunkSize {
-			chunkSize = remaining
-		}
-
-		// Create local buffer for this chunk
-		buffer := make([]byte, chunkSize)
-
-		// Use process_vm_readv to read memory directly
-		localIovec := unix.Iovec{
-			Base: &buffer[0],
-			Len:  chunkSize,
-		}
-		remoteIovec := unix.RemoteIovec{
-			Base: vma.Start + uintptr(offset),
-			Len:  int(chunkSize),
-		}
-
-		_, err := unix.ProcessVMReadv(w.info.Pid, []unix.Iovec{localIovec}, []unix.RemoteIovec{remoteIovec}, 0)
-		if err != nil {
-			// If we can't read this memory, fill with zeros
-			if err == unix.ENOENT || err == unix.EFAULT {
-				clear(data[offset : offset+chunkSize])
-				continue
-			}
-			return nil, fmt.Errorf("failed to read memory at %x: %w", vma.Start+uintptr(offset), err)
-		}
-
-		// Copy the chunk data to the buffer
-		copy(data[offset:offset+chunkSize], buffer)
+	// Read the data from the BufferManager
+	data, err := w.bufferManager.ReadData(vmaOffset, vma.Size())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read VMA data from buffer manager: %w", err)
 	}
 
 	return data, nil

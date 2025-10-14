@@ -1,4 +1,4 @@
-module github.com/livecore
+module github.com/bradfitz/livecore
 
 go 1.25
 

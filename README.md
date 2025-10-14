@@ -4,21 +4,19 @@ A low-pause, capture-only Linux core dumper written in Go.
 
 ## Overview
 
-livecore produces standards-compliant ELF ET_CORE core files from running Linux processes with minimal stop-the-world (STW) time by using iterative pre-copy passes and a short final delta copy.
+`livecore` produces core files from running Linux processes with minimal stop-the-world (STW) time by using iterative pre-copy passes and a short final delta copy.
 
-## Features
+The motivation is to run [`goref`](https://github.com/cloudwego/goref/) against processes
+with hundreds of gigabytes of memory where `grf attach PID` is too slow and would result in visible downtime
+for users. Instead, `goref` supports working from a core file, but tools like `gcore`
+pause the process while they copy.
 
-- **Low pause time**: Uses soft-dirty tracking to minimize process interruption
-- **Standards compliant**: Produces ELF core files readable by gdb, lldb, readelf
-- **No restore functionality**: Capture-only tool
-- **Cross-namespace support**: Works across PID namespaces with appropriate capabilities
+Instead `livecore` aims to generate subsecond pauses while the scanning phase before the pause and ELF core writing phase after the pause can take significantly longer.
 
 ## Requirements
 
-- Linux x86-64 (aarch64 support planned)
-- Go ≥ 1.25
-- CAP_SYS_PTRACE capability
-- Yama ptrace scope permitting
+- Linux x86-64 (aarch64 patches welcome)
+- Go 1.25
 
 ## Usage
 
@@ -47,12 +45,16 @@ cd livecore
 go build -o livecore .
 ```
 
-## Testing
+## Apologies
 
-```bash
-go test ./...
-```
+This was my first (and so far only) vibe coding project, to see what all the
+rage was about. It was ... interesting.
+
+So be very suspicious of this tool.
+
+The core dump it generates is incomplete and testing so far has only
+involved `goref` consuming it.
 
 ## License
 
-MIT
+MIT.

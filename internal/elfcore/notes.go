@@ -195,6 +195,9 @@ func createFPRegsetNote(thread Thread) Note {
 	// FPU register set - 512 bytes for x87 + SSE
 	fpregset := make([]byte, 512)
 
+	// NOTE(bradfitz): don't really care for gorefs (grf) purposes, as these can't
+	// contain pointers, IIUC.
+
 	return Note{
 		Name: "CORE",
 		Type: NT_FPREGSET,
@@ -206,6 +209,9 @@ func createFPRegsetNote(thread Thread) Note {
 func createXStateNote(thread Thread) Note {
 	// XSAVE state - variable size
 	xstate := make([]byte, 1024) // Simplified size
+
+	// NOTE(bradfitz): don't really care for gorefs (grf) purposes, as these can't
+	// contain pointers, IIUC.
 
 	return Note{
 		Name: "CORE",

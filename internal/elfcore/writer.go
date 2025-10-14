@@ -9,9 +9,10 @@ import (
 
 // ELFWriter handles writing ELF core files
 type ELFWriter struct {
-	file   *os.File
-	offset uint64
-	info   *CoreInfo
+	file       *os.File
+	offset     uint64
+	info       *CoreInfo
+	outputFile string // Base output file path for finding temp page files
 }
 
 // NewELFWriter creates a new ELF core file writer
@@ -22,9 +23,10 @@ func NewELFWriter(filename string, info *CoreInfo) (*ELFWriter, error) {
 	}
 
 	return &ELFWriter{
-		file:   file,
-		offset: 0,
-		info:   info,
+		file:       file,
+		offset:     0,
+		info:       info,
+		outputFile: filename,
 	}, nil
 }
 
@@ -285,11 +287,51 @@ func (w *ELFWriter) writeLoadSegments(segments []LoadSegment) error {
 
 // writeLoadSegment writes a single PT_LOAD segment
 func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
-	// This is a placeholder - actual memory copying will be implemented
-	// in the copy package and called from here
-	zero := make([]byte, segment.VMA.Size())
-	_, err := w.file.WriteAt(zero, int64(segment.Offset))
+	// Read memory data from the temporary page files
+	data, err := w.readMemoryData(segment.VMA)
+	if err != nil {
+		return fmt.Errorf("failed to read memory data for VMA %x-%x: %w",
+			segment.VMA.Start, segment.VMA.End, err)
+	}
+
+	_, err = w.file.WriteAt(data, int64(segment.Offset))
 	return err
+}
+
+// readMemoryData reads memory data for a VMA from temporary page files
+func (w *ELFWriter) readMemoryData(vma VMA) ([]byte, error) {
+	// Create a buffer for the entire VMA
+	data := make([]byte, vma.Size())
+
+	// Calculate page size (assuming 4KB for now)
+	pageSize := uint64(4096)
+
+	// Read each page in the VMA
+	for offset := uint64(0); offset < vma.Size(); offset += pageSize {
+		pageAddr := vma.Start + uintptr(offset)
+		pageFileName := fmt.Sprintf("%s.tmp.page%x", w.outputFile, pageAddr)
+
+		// Try to read the page file
+		pageData, err := os.ReadFile(pageFileName)
+		if err != nil {
+			// If file doesn't exist, fill with zeros
+			if os.IsNotExist(err) {
+				// Fill this page with zeros
+				clear(data[offset : offset+pageSize])
+				continue
+			}
+			return nil, fmt.Errorf("failed to read page file %s: %w", pageFileName, err)
+		}
+
+		// Copy the page data to the buffer
+		copySize := pageSize
+		if offset+pageSize > vma.Size() {
+			copySize = vma.Size() - offset
+		}
+		copy(data[offset:offset+copySize], pageData[:copySize])
+	}
+
+	return data, nil
 }
 
 // getDumpableVMAs returns VMAs that should be included in the core dump

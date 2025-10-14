@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/bradfitz/livecore/internal/buffer"
 	"github.com/bradfitz/livecore/internal/copy"
@@ -289,9 +290,9 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buf
 
 	preCopy := time.Now()
 
-	for pageAddr := range currentDirtyPages {
+	for pageAddr, vma := range currentDirtyPages {
 		t0 := time.Now()
-		if err := copyDirtyPage(config.Pid, pageAddr, bufferManager); err != nil {
+		if err := copyDirtyPage(config.Pid, pageAddr, *vma, bufferManager); err != nil {
 			// Log but don't fail - some pages might not be readable
 			if config.Verbose {
 				log.Printf("Warning: failed to copy page at %x: %v", pageAddr, err)
@@ -315,18 +316,20 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buf
 }
 
 // copyDirtyPage copies a single dirty page to the BufferManager
-func copyDirtyPage(pid int, pageAddr uintptr, bufferManager *buffer.Manager) error {
+func copyDirtyPage(pid int, pageAddr uintptr, vma copy.VMA, bufferManager *buffer.Manager) error {
 	// Get page size
 	pageSize := copy.GetPageSize()
 
 	// Get the offset for this page in the temp file
-	pageOffset := bufferManager.GetOffsetForVMA(uint64(pageAddr), uint64(pageSize))
+	pageOffset := bufferManager.GetOffsetForVMA(uint64(vma.Start), vma.Size)
 
 	// Get the mmap pointer for this page
-	mmapPtr, err := bufferManager.GetMmapPointer(pageOffset)
+	vmaBase, err := bufferManager.GetMmapPointer(pageOffset)
 	if err != nil {
 		return fmt.Errorf("failed to get mmap pointer: %w", err)
 	}
+	// Then adjust up to where in that VMA the page is
+	mmapPtr := unsafe.Add(vmaBase, uintptr(pageAddr-vma.Start))
 
 	// Copy the page directly to mmap
 	err = copy.CopyMemoryToMmap(pid, pageAddr, uint64(pageSize), mmapPtr)

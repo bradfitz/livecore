@@ -38,6 +38,8 @@ func NewPreCopyEngine(pid int, maxPasses int, dirtyThreshold float64, workers in
 type PageMap struct {
 	pid      int
 	pageSize int
+
+	scratch bytes.Buffer // reusable buffer for pagemap reads
 }
 
 // NewPageMap creates a new PageMap for the given process
@@ -66,14 +68,11 @@ func (pm *PageMap) ClearSoftDirty() error {
 }
 
 // GetDirtyPages reads the pagemap to find dirty pages
-func (pm *PageMap) GetDirtyPages(vmas []VMA) (map[uintptr]bool, error) {
-	dirtyPages := make(map[uintptr]bool)
-
-	// Create a reusable buffer for pagemap reads
-	var buffer bytes.Buffer
+func (pm *PageMap) GetDirtyPages(vmas []VMA) (map[uintptr]*VMA, error) {
+	dirtyPages := make(map[uintptr]*VMA)
 
 	for _, vma := range vmas {
-		if err := pm.scanVMAForDirtyPages(vma, dirtyPages, &buffer); err != nil {
+		if err := pm.scanVMAForDirtyPages(vma, dirtyPages); err != nil {
 			return nil, fmt.Errorf("failed to scan VMA %x-%x: %w", vma.Start, vma.End, err)
 		}
 	}
@@ -82,7 +81,7 @@ func (pm *PageMap) GetDirtyPages(vmas []VMA) (map[uintptr]bool, error) {
 }
 
 // scanVMAForDirtyPages scans a VMA for dirty pages using a reusable buffer
-func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool, buffer *bytes.Buffer) error {
+func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]*VMA) error {
 	pagemapPath := fmt.Sprintf("/proc/%d/pagemap", pm.pid)
 	file, err := os.Open(pagemapPath)
 	if err != nil {
@@ -105,11 +104,12 @@ func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool, bu
 	totalBytes := numPages * 8
 
 	// Reset buffer for reuse
-	buffer.Reset()
+	buf := &pm.scratch
+	buf.Reset()
 
 	// Ensure buffer has enough capacity
-	if buffer.Cap() < totalBytes {
-		buffer.Grow(totalBytes - buffer.Cap())
+	if buf.Cap() < totalBytes {
+		buf.Grow(totalBytes - buf.Cap())
 	}
 
 	// Calculate the starting offset in the pagemap file
@@ -117,11 +117,11 @@ func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool, bu
 
 	// Read all pagemap entries for this VMA in one system call
 	// Get available buffer space and ensure it's large enough
-	available := buffer.AvailableBuffer()
+	available := buf.AvailableBuffer()
 	if len(available) < totalBytes {
 		// If available buffer is too small, we need to grow more
-		buffer.Grow(totalBytes - len(available))
-		available = buffer.AvailableBuffer()
+		buf.Grow(totalBytes - len(available))
+		available = buf.AvailableBuffer()
 	}
 	readBuffer := available[:totalBytes]
 	n, err := file.ReadAt(readBuffer, startOffset)
@@ -134,7 +134,7 @@ func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool, bu
 	}
 
 	// Process each pagemap entry from the buffer
-	for i := 0; i < numPages; i++ {
+	for i := range numPages {
 		addr := start + uintptr(i*pm.pageSize)
 		entryOffset := i * 8
 
@@ -152,7 +152,7 @@ func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool, bu
 		softDirty := (entryValue & (1 << 55)) != 0
 
 		if softDirty {
-			dirtyPages[addr] = true
+			dirtyPages[addr] = &vma
 		}
 	}
 
@@ -204,7 +204,7 @@ type PreCopyResult struct {
 	TotalTime       time.Duration
 	FinalDirtyRatio float64
 	VMAs            []VMA
-	DirtyPages      map[uintptr]bool
+	DirtyPages      map[uintptr]*VMA
 }
 
 // RunPreCopy runs the iterative pre-copy process

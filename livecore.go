@@ -252,8 +252,6 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to write core file: %w", err)
 	}
 
-	// Note: No temp files to clean up - using BufferManager
-
 	if config.Verbose {
 		log.Printf("Core dump completed in %v", time.Since(preCore).Round(time.Millisecond))
 	}

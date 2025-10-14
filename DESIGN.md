@@ -65,8 +65,8 @@ type Thread struct {
 1. Freeze all threads with `PTRACE_SEIZE` + `PTRACE_INTERRUPT`
 2. Collect register state with `PTRACE_GETREGSET`
 3. Copy remaining dirty pages
-4. Generate ELF core file
-5. Unfreeze threads with `PTRACE_CONT`
+4. Unfreeze threads with `PTRACE_CONT`
+5. Generate ELF core file
 
 ## ELF Core Format
 

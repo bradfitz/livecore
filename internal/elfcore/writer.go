@@ -66,17 +66,16 @@ func (w *ELFWriter) WriteCore() error {
 	return nil
 }
 
-// calculateNoteLayout calculates the size and offset of the note segment
-func (w *ELFWriter) calculateNoteLayout() (uint64, uint64) {
+// calculateNoteLayout calculates the size and offset of the note segment.
+func (w *ELFWriter) calculateNoteLayout() (noteSize, noteOffset uint64) {
 	// Start after ELF header and program headers
-	headerSize := uint64(64)                          // ELF64_Ehdr
-	phdrSize := uint64(56)                            // ELF64_Phdr
+	const phdrSize = 56                               // ELF64_Phdr
 	phdrCount := uint64(len(w.getDumpableVMAs()) + 1) // +1 for PT_NOTE
 
-	noteOffset := headerSize + phdrCount*phdrSize
+	noteOffset = elfHeaderSize + phdrCount*phdrSize
 
 	// Calculate note size
-	noteSize := uint64(0)
+	noteSize = uint64(0)
 	for _, note := range w.info.Notes {
 		noteSize += w.calculateNoteSize(note)
 	}
@@ -101,9 +100,11 @@ func (w *ELFWriter) calculateLoadSegments(noteEnd uint64) []LoadSegment {
 	return segments
 }
 
+const elfHeaderSize = 64
+
 // writeELFHeader writes the ELF file header
 func (w *ELFWriter) writeELFHeader(phnum int) error {
-	header := make([]byte, 64)
+	header := make([]byte, elfHeaderSize)
 
 	// ELF magic
 	copy(header[0:4], []byte{0x7f, 'E', 'L', 'F'})
@@ -173,7 +174,7 @@ func (w *ELFWriter) writeELFHeader(phnum int) error {
 
 // writeProgramHeaders writes the program header table
 func (w *ELFWriter) writeProgramHeaders(noteOffset, noteSize uint64, loadSegments []LoadSegment) error {
-	phdrOffset := int64(64) // After ELF header
+	phdrOffset := int64(elfHeaderSize)
 
 	// Write PT_NOTE header
 	notePhdr := w.createNotePhdr(noteOffset, noteSize)

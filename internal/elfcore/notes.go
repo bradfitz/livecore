@@ -17,18 +17,15 @@ func NewNoteWriter() *NoteWriter {
 	return &NoteWriter{}
 }
 
+func padUpTo4Bytes(n int) int {
+	return (n + 3) &^ 3
+}
+
 // WriteNote writes a note to the buffer
 func (nw *NoteWriter) WriteNote(name string, noteType NoteType, data []byte) error {
 	// Calculate sizes
-	nameSize := len(name) + 1 // +1 for null terminator
-	if nameSize%4 != 0 {
-		nameSize = ((nameSize + 3) / 4) * 4 // Align to 4 bytes
-	}
-
-	dataSize := len(data)
-	if dataSize%4 != 0 {
-		dataSize = ((dataSize + 3) / 4) * 4 // Align to 4 bytes
-	}
+	nameSize := padUpTo4Bytes(len(name) + 1) // +1 for null terminator
+	dataSize := padUpTo4Bytes(len(data))
 
 	// Write note header
 	header := make([]byte, 12)
@@ -41,18 +38,15 @@ func (nw *NoteWriter) WriteNote(name string, noteType NoteType, data []byte) err
 	}
 
 	// Write name (null-terminated and padded)
-	nameBytes := make([]byte, nameSize)
-	copy(nameBytes, name)
-	if _, err := nw.buf.Write(nameBytes); err != nil {
-		return err
+	nw.buf.WriteString(name)
+	for range nameSize - len(name) {
+		nw.buf.WriteByte(0)
 	}
 
-	// Write data (padded)
 	if len(data) > 0 {
-		dataBytes := make([]byte, dataSize)
-		copy(dataBytes, data)
-		if _, err := nw.buf.Write(dataBytes); err != nil {
-			return err
+		nw.buf.Write(data)
+		for range dataSize - len(data) {
+			nw.buf.WriteByte(0)
 		}
 	}
 

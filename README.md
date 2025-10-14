@@ -54,7 +54,3 @@ So be very suspicious of this tool.
 
 The core dump it generates is incomplete and testing so far has only
 involved `goref` consuming it.
-
-## License
-
-MIT.

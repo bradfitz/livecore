@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -27,6 +30,7 @@ type Config struct {
 	DirtyThreshold float64
 	Concurrency    int
 	Verbose        bool
+	FixYama        bool
 }
 
 // parseFlags parses command line flags
@@ -37,6 +41,7 @@ func parseFlags() (*Config, error) {
 	flag.Float64Var(&config.DirtyThreshold, "dirty-thresh", 5.0, "stop when dirty < threshold (percentage)")
 	flag.IntVar(&config.Concurrency, "concurrency", runtime.GOMAXPROCS(0), "concurrent read workers")
 	flag.BoolVar(&config.Verbose, "verbose", false, "show progress and statistics")
+	flag.BoolVar(&config.FixYama, "fix-yama", false, "automatically fix yama.ptrace_scope sysctl and restore on exit")
 
 	flag.Parse()
 
@@ -73,6 +78,51 @@ func parseFlags() (*Config, error) {
 	return config, nil
 }
 
+// checkYamaSysctl returns the value of yama.ptrace_scope.
+func checkYamaSysctl() (int, error) {
+	data, err := os.ReadFile("/proc/sys/kernel/yama/ptrace_scope")
+	if err != nil {
+		return 0, fmt.Errorf("failed to read yama.ptrace_scope: %w", err)
+	}
+
+	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse yama.ptrace_scope value: %w", err)
+	}
+
+	return value, nil
+}
+
+// setYamaSysctl sets the yama.ptrace_scope sysctl value
+func setYamaSysctl(value int) error {
+	return os.WriteFile("/proc/sys/kernel/yama/ptrace_scope", []byte(fmt.Sprintf("%d\n", value)), 0644)
+}
+
+// fixYamaSysctl temporarily sets yama.ptrace_scope to 0 and returns a cleanup function
+func fixYamaSysctl() (func(), error) {
+	originalValue, err := checkYamaSysctl()
+	if err != nil {
+		return nil, err
+	}
+
+	if originalValue == 0 {
+		// Already set to 0, no need to change
+		return func() {}, nil
+	}
+
+	// Set to 0
+	if err := setYamaSysctl(0); err != nil {
+		return nil, fmt.Errorf("failed to set yama.ptrace_scope to 0: %w", err)
+	}
+
+	// Return cleanup function
+	return func() {
+		if err := setYamaSysctl(originalValue); err != nil {
+			log.Printf("Warning: failed to restore yama.ptrace_scope to %d: %v", originalValue, err)
+		}
+	}, nil
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	config, err := parseFlags()
@@ -81,7 +131,53 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := runLivecore(config); err != nil {
+	// Check yama sysctl and handle it
+	yamaValue, err := checkYamaSysctl()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var cleanupYama func()
+	if yamaValue != 0 {
+		if config.FixYama {
+			// Automatically fix yama sysctl
+			cleanupYama, err = fixYamaSysctl()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to fix yama sysctl: %v\n", err)
+				os.Exit(1)
+			}
+			log.Printf("Temporarily set yama.ptrace_scope to 0 (was %d)", yamaValue)
+		} else {
+			// Fail with instructions
+			fmt.Fprintf(os.Stderr, "Error: yama.ptrace_scope is set to %d (non-zero), which prevents ptrace\n", yamaValue)
+			fmt.Fprintf(os.Stderr, "To fix this, run: sudo sysctl kernel.yama.ptrace_scope=0\n")
+			fmt.Fprintf(os.Stderr, "Or use the --fix-yama flag to automatically fix and restore it\n")
+			os.Exit(1)
+		}
+	}
+
+	// Set up signal handling to ensure cleanup on exit
+	if cleanupYama != nil {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigChan
+			log.Println("Received signal, cleaning up...")
+			cleanupYama()
+			os.Exit(1)
+		}()
+	}
+
+	// Run livecore
+	err = runLivecore(config)
+
+	// Clean up yama sysctl if we modified it
+	if cleanupYama != nil {
+		cleanupYama()
+	}
+
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

@@ -212,7 +212,7 @@ type PreCopyResult struct {
 // RunPreCopy runs the iterative pre-copy process
 func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 	if pce.verbose {
-		fmt.Printf("Starting pre-copy for %d VMAs\n", len(vmas))
+		log.Printf("Starting pre-copy for %d VMAs", len(vmas))
 	}
 
 	startTime := time.Now()
@@ -229,7 +229,7 @@ func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 	// Run pre-copy passes
 	for pass := 1; pass <= pce.maxPasses; pass++ {
 		if pce.verbose {
-			fmt.Printf("Pre-copy pass %d/%d\n", pass, pce.maxPasses)
+			log.Printf("Pre-copy pass %d/%d", pass, pce.maxPasses)
 		}
 
 		passStart := time.Now()
@@ -247,14 +247,14 @@ func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 
 		passTime := time.Since(passStart)
 		if pce.verbose {
-			fmt.Printf("Pass %d completed in %v, dirty ratio: %.2f%%\n",
+			log.Printf("Pass %d completed in %v, dirty ratio: %.2f%%",
 				pass, passTime, dirtyRatio*100)
 		}
 
 		// Check if we should stop
 		if dirtyRatio < pce.dirtyThreshold {
 			if pce.verbose {
-				fmt.Printf("Dirty ratio %.2f%% below threshold %.2f%%, stopping pre-copy\n",
+				log.Printf("Dirty ratio %.2f%% below threshold %.2f%%, stopping pre-copy",
 					dirtyRatio*100, pce.dirtyThreshold*100)
 			}
 			break
@@ -282,7 +282,7 @@ func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 	totalTime := time.Since(startTime)
 
 	if pce.verbose {
-		fmt.Printf("Pre-copy completed in %v, final dirty ratio: %.2f%%\n",
+		log.Printf("Pre-copy completed in %v, final dirty ratio: %.2f%%",
 			totalTime, finalDirtyRatio*100)
 	}
 
@@ -298,7 +298,7 @@ func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 // copyAllPages copies all pages in the given VMAs
 func (pce *PreCopyEngine) copyAllPages(vmas []VMA) error {
 	if pce.verbose {
-		fmt.Printf("Copying %d VMAs using process_vm_readv\n", len(vmas))
+		log.Printf("Copying %d VMAs using process_vm_readv", len(vmas))
 	}
 
 	// Copy each VMA using process_vm_readv

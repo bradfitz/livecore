@@ -73,6 +73,7 @@ func parseFlags() (*Config, error) {
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	config, err := parseFlags()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -88,10 +89,8 @@ func main() {
 // runLivecore is the main function
 func runLivecore(config *Config) error {
 	if config.Verbose {
-		fmt.Printf("livecore: dumping process %d to %s\n", config.Pid, config.OutputFile)
+		log.Printf("livecore: dumping process %d to %s\n", config.Pid, config.OutputFile)
 	}
-
-	startTime := time.Now()
 
 	// Create BufferManager for efficient memory buffering
 	bufferManager, err := buffer.NewBufferManager(config.OutputFile)
@@ -102,7 +101,7 @@ func runLivecore(config *Config) error {
 
 	// Phase 1: Discovery
 	if config.Verbose {
-		fmt.Println("Phase 1: Discovery")
+		log.Println("Phase 1: Discovery")
 	}
 
 	// Parse VMAs
@@ -112,7 +111,7 @@ func runLivecore(config *Config) error {
 	}
 
 	if config.Verbose {
-		fmt.Printf("Found %d VMAs\n", len(vmas))
+		log.Printf("Found %d VMAs", len(vmas))
 	}
 
 	// Parse threads
@@ -122,7 +121,7 @@ func runLivecore(config *Config) error {
 	}
 
 	if config.Verbose {
-		fmt.Printf("Found %d threads\n", len(threads))
+		log.Printf("Found %d threads", len(threads))
 	}
 
 	// Parse auxiliary vector
@@ -133,11 +132,11 @@ func runLivecore(config *Config) error {
 
 	// Phase 2: Pre-copy (if enabled)
 	if config.Verbose {
-		fmt.Printf("MaxPasses: %d, DirtyThreshold: %.2f\n", config.MaxPasses, config.DirtyThreshold)
+		log.Printf("MaxPasses: %d, DirtyThreshold: %.2f", config.MaxPasses, config.DirtyThreshold)
 	}
 	if config.MaxPasses > 0 {
 		if config.Verbose {
-			fmt.Println("Phase 2: Pre-copy")
+			log.Println("Phase 2: Pre-copy")
 		}
 
 		preCopyEngine := copy.NewPreCopyEngine(
@@ -157,13 +156,13 @@ func runLivecore(config *Config) error {
 		}
 
 		if config.Verbose {
-			fmt.Printf("Pre-copy completed in %v\n", result.TotalTime)
+			log.Printf("Pre-copy completed in %v", result.TotalTime)
 		}
 	}
 
 	// Phase 3: Final stop and delta copy
 	if config.Verbose {
-		fmt.Println("Phase 3: Final stop and delta copy")
+		log.Println("Phase 3: Final stop and delta copy")
 	}
 
 	log.Printf("Starting freeze.")
@@ -175,7 +174,8 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to freeze threads: %w", err)
 	}
 
-	log.Printf("Frozen threads at STOP+%v", time.Since(stopStart))
+	log.Printf("[STW] Froze threads (took %v)", time.Since(stopStart))
+	preThreads := time.Now()
 
 	// Collect register state
 	if err := proc.CollectThreadRegisters(frozenThreads); err != nil {
@@ -183,24 +183,27 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to collect registers: %w", err)
 	}
 
-	log.Printf("Got thread registers at STOP+%v", time.Since(stopStart))
+	if config.Verbose {
+		log.Printf("[STW] Got thread registers (took %v)", time.Since(preThreads))
+	}
 
 	// Re-scan maps (authoritative at stop time)
+	preMaps := time.Now()
 	finalVMAs, err := proc.ParseMaps(config.Pid)
 	if err != nil {
 		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to re-scan maps: %w", err)
 	}
 
-	log.Printf("Got final VMAs at STOP+%v", time.Since(stopStart))
+	if config.Verbose {
+		log.Printf("[STW] Got final VMAs (took %v)", time.Since(preMaps))
+	}
 
 	// Copy remaining dirty pages (re-scan after freeze to get current dirty state)
 	if err := copyRemainingDirtyPages(config, finalVMAs, bufferManager); err != nil {
 		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to copy remaining dirty pages: %w", err)
 	}
-
-	log.Printf("Copied remaining dirty pages at STOP+%v", time.Since(stopStart))
 
 	// Unfreeze threads immediately after final delta copy
 	// The core file writing can take a long time, so we don't want to keep
@@ -209,16 +212,17 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to unfreeze threads: %w", err)
 	}
 
-	log.Printf("Unfrozen threads at STOP+%v", time.Since(stopStart))
+	if config.Verbose {
+		log.Printf("[STW] Unfrozen threads at STOP+%v", time.Since(stopStart))
+	}
 
 	stopTime := time.Since(stopStart)
 
-	if config.Verbose {
-		fmt.Printf("Stop time: %v\n", stopTime)
-	}
+	log.Printf("[STW] Done; total stop time was %v", stopTime)
+
 	// Phase 4: Generate ELF core file
 	if config.Verbose {
-		fmt.Println("Phase 4: Generate ELF core file")
+		log.Println("Phase 4: Generate ELF core file")
 	}
 
 	// Create core info
@@ -237,6 +241,7 @@ func runLivecore(config *Config) error {
 	coreInfo.Notes = notes
 
 	// Write ELF core file
+	preCore := time.Now()
 	elfWriter, err := elfcore.NewELFWriter(config.OutputFile, coreInfo, bufferManager)
 	if err != nil {
 		return fmt.Errorf("failed to create ELF writer: %w", err)
@@ -249,10 +254,8 @@ func runLivecore(config *Config) error {
 
 	// Note: No temp files to clean up - using BufferManager
 
-	totalTime := time.Since(startTime)
-
 	if config.Verbose {
-		fmt.Printf("Core dump completed in %v (stop time: %v)\n", totalTime, stopTime)
+		log.Printf("Core dump completed in %v", time.Since(preCore).Round(time.Millisecond))
 	}
 
 	return nil
@@ -263,38 +266,51 @@ func runLivecore(config *Config) error {
 // after the process has been frozen, ensuring we capture the final state
 func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buffer.Manager) error {
 	if config.Verbose {
-		fmt.Println("Copying remaining dirty pages...")
+		log.Println("Copying remaining dirty pages...")
 	}
 
 	// Create a new page map to scan for dirty pages after freeze
 	pageMap := copy.NewPageMap(config.Pid)
 
 	// Get current dirty pages (after freeze)
-	t0 := time.Now()
+	preDisco := time.Now()
 	currentDirtyPages, err := pageMap.GetDirtyPages(convertVMAsToCopy(vmas))
 	if err != nil {
 		return fmt.Errorf("failed to get current dirty pages: %w", err)
 	}
+	durDisco := time.Since(preDisco).Round(time.Millisecond)
 	if config.Verbose {
-		log.Printf("Found remaining dirty pages in %v", time.Since(t0))
+		log.Printf("Found remaining dirty pages in %v", durDisco)
 	}
 
 	// Copy only the dirty pages using process_vm_readv
 	// This is the minimal final copy to capture the exact state at freeze time
 	if config.Verbose {
-		fmt.Printf("Found %d dirty pages to copy\n", len(currentDirtyPages))
+		log.Printf("Found %d dirty pages to copy", len(currentDirtyPages))
 	}
+
+	preCopy := time.Now()
+
 	for pageAddr := range currentDirtyPages {
 		t0 := time.Now()
 		if err := copyDirtyPage(config.Pid, pageAddr, bufferManager); err != nil {
 			// Log but don't fail - some pages might not be readable
 			if config.Verbose {
-				fmt.Printf("Warning: failed to copy page at %x: %v\n", pageAddr, err)
+				log.Printf("Warning: failed to copy page at %x: %v", pageAddr, err)
 			}
 		}
 		if config.Verbose {
-			log.Printf("Copied final dirty page at %x in %v", pageAddr, time.Since(t0))
+			d := time.Since(t0)
+			if d > 10*time.Millisecond {
+				log.Printf("Copied final dirty page at %x in %v", pageAddr, d)
+			}
 		}
+	}
+
+	if config.Verbose {
+		durCopy := time.Since(preCopy).Round(time.Millisecond)
+		durTotal := time.Since(preDisco).Round(time.Millisecond)
+		log.Printf("Copied final %d dirty pages in %v (discovery %v + copy %v)", len(currentDirtyPages), durTotal, durDisco, durCopy)
 	}
 
 	return nil

@@ -175,11 +175,15 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to freeze threads: %w", err)
 	}
 
+	log.Printf("Frozen threads at STOP+%v", time.Since(stopStart))
+
 	// Collect register state
 	if err := proc.CollectThreadRegisters(frozenThreads); err != nil {
 		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to collect registers: %w", err)
 	}
+
+	log.Printf("Got thread registers at STOP+%v", time.Since(stopStart))
 
 	// Re-scan maps (authoritative at stop time)
 	finalVMAs, err := proc.ParseMaps(config.Pid)
@@ -188,11 +192,15 @@ func runLivecore(config *Config) error {
 		return fmt.Errorf("failed to re-scan maps: %w", err)
 	}
 
+	log.Printf("Got final VMAs at STOP+%v", time.Since(stopStart))
+
 	// Copy remaining dirty pages (re-scan after freeze to get current dirty state)
 	if err := copyRemainingDirtyPages(config, finalVMAs, bufferManager); err != nil {
 		proc.UnfreezeAllThreads(frozenThreads)
 		return fmt.Errorf("failed to copy remaining dirty pages: %w", err)
 	}
+
+	log.Printf("Copied remaining dirty pages at STOP+%v", time.Since(stopStart))
 
 	// Unfreeze threads immediately after final delta copy
 	// The core file writing can take a long time, so we don't want to keep
@@ -200,6 +208,8 @@ func runLivecore(config *Config) error {
 	if err := proc.UnfreezeAllThreads(frozenThreads); err != nil {
 		return fmt.Errorf("failed to unfreeze threads: %w", err)
 	}
+
+	log.Printf("Unfrozen threads at STOP+%v", time.Since(stopStart))
 
 	stopTime := time.Since(stopStart)
 
@@ -260,9 +270,13 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buf
 	pageMap := copy.NewPageMap(config.Pid)
 
 	// Get current dirty pages (after freeze)
+	t0 := time.Now()
 	currentDirtyPages, err := pageMap.GetDirtyPages(convertVMAsToCopy(vmas))
 	if err != nil {
 		return fmt.Errorf("failed to get current dirty pages: %w", err)
+	}
+	if config.Verbose {
+		log.Printf("Found remaining dirty pages in %v", time.Since(t0))
 	}
 
 	// Copy only the dirty pages using process_vm_readv
@@ -271,11 +285,15 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buf
 		fmt.Printf("Found %d dirty pages to copy\n", len(currentDirtyPages))
 	}
 	for pageAddr := range currentDirtyPages {
+		t0 := time.Now()
 		if err := copyDirtyPage(config.Pid, pageAddr, bufferManager); err != nil {
 			// Log but don't fail - some pages might not be readable
 			if config.Verbose {
 				fmt.Printf("Warning: failed to copy page at %x: %v\n", pageAddr, err)
 			}
+		}
+		if config.Verbose {
+			log.Printf("Copied page at %x in %v", pageAddr, time.Since(t0))
 		}
 	}
 
@@ -287,33 +305,23 @@ func copyDirtyPage(pid int, pageAddr uintptr, bufferManager *buffer.Manager) err
 	// Get page size
 	pageSize := copy.GetPageSize()
 
-	// Create buffer for the page
-	buffer := make([]byte, pageSize)
+	// Get the offset for this page in the temp file
+	pageOffset := bufferManager.GetOffsetForVMA(uint64(pageAddr), uint64(pageSize))
 
-	// Use process_vm_readv to copy the page
-	localIovec := unix.Iovec{
-		Base: &buffer[0],
-		Len:  uint64(pageSize),
-	}
-	remoteIovec := unix.RemoteIovec{
-		Base: pageAddr,
-		Len:  pageSize,
+	// Get the mmap pointer for this page
+	mmapPtr, err := bufferManager.GetMmapPointer(pageOffset)
+	if err != nil {
+		return fmt.Errorf("failed to get mmap pointer: %w", err)
 	}
 
-	_, err := unix.ProcessVMReadv(pid, []unix.Iovec{localIovec}, []unix.RemoteIovec{remoteIovec}, 0)
+	// Copy the page directly to mmap
+	err = copy.CopyMemoryToMmap(pid, pageAddr, uint64(pageSize), mmapPtr)
 	if err != nil {
 		// Skip pages that can't be read (like vsyscall, etc.)
 		if err == unix.ENOENT || err == unix.EFAULT {
 			return nil
 		}
 		return fmt.Errorf("failed to read page at %x: %w", pageAddr, err)
-	}
-
-	// Write page to BufferManager
-	// Get the offset for this page in the temp file
-	pageOffset := bufferManager.GetOffsetForVMA(uint64(pageAddr), uint64(pageSize))
-	if err := bufferManager.WriteData(pageOffset, buffer); err != nil {
-		return fmt.Errorf("failed to write page to buffer manager: %w", err)
 	}
 
 	return nil

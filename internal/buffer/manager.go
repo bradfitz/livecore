@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,6 +29,10 @@ type Manager struct {
 	allocations map[offAndSize]TmpOffset // VMA offset+size -> temp file offset.
 	nextOffset  TmpOffset                // Next available offset in temp file.
 	fsBlockSize uint64                   // Filesystem block size for alignment.
+
+	// Mmap information for direct writes
+	mmapData []byte // Mapped memory region.
+	mmapSize int64  // Size of the mapped region.
 }
 
 // NewBufferManager creates a new BufferManager with a temporary file
@@ -48,11 +53,25 @@ func NewBufferManager(outputFile string) (*Manager, error) {
 		return nil, fmt.Errorf("failed to get filesystem block size: %w", err)
 	}
 
+	// Create a large initial file and mmap for direct writes
+	mmapSize := int64(512 << 30) // 512GB
+	if err := tempFile.Truncate(mmapSize); err != nil {
+		tempFile.Close()
+		return nil, fmt.Errorf("failed to create large temp file: %w", err)
+	}
+	mmapData, err := unix.Mmap(int(tempFile.Fd()), 0, int(mmapSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		tempFile.Close()
+		return nil, fmt.Errorf("failed to mmap temp file: %w", err)
+	}
+
 	bm := &Manager{
 		file:        tempFile,
 		allocations: make(map[offAndSize]TmpOffset),
 		nextOffset:  0,
 		fsBlockSize: fsBlockSize,
+		mmapData:    mmapData,
+		mmapSize:    mmapSize,
 	}
 
 	return bm, nil
@@ -83,7 +102,17 @@ func (bm *Manager) GetOffsetForVMA(vmaStart, vmaSize uint64) TmpOffset {
 	bm.allocations[key] = alignedOffset
 	bm.nextOffset = alignedOffset + TmpOffset(vmaSize)
 
+	// File is already large enough (512GB), no need to extend
+
 	return alignedOffset
+}
+
+// GetMmapPointer returns a pointer to the mmap data at the given offset.
+func (bm *Manager) GetMmapPointer(offset TmpOffset) (unsafe.Pointer, error) {
+	if int64(offset) >= bm.mmapSize {
+		return nil, fmt.Errorf("offset %d exceeds mmap size %d", offset, bm.mmapSize)
+	}
+	return unsafe.Pointer(&bm.mmapData[offset]), nil
 }
 
 // GetExistingOffsetForVMA returns the offset in the temp file for the given VMA if it exists.
@@ -105,21 +134,31 @@ func (bm *Manager) PunchHole(offset TmpOffset, length uint64) error {
 	return nil
 }
 
-// Close closes the BufferManager and cleans up the temp file
+// Close closes the BufferManager and cleans up the temp file.
 func (bm *Manager) Close() error {
+	if bm.mmapData != nil {
+		unix.Munmap(bm.mmapData)
+		bm.mmapData = nil
+	}
 	if bm.file != nil {
 		bm.file.Close()
 	}
 	return nil
 }
 
-// ReadData reads data from the temp file at the given offset.
+// ReadData reads data from the mmap buffer at the given offset.
 func (bm *Manager) ReadData(offset TmpOffset, size uint64) ([]byte, error) {
-	data := make([]byte, size)
-	_, err := bm.file.ReadAt(data, int64(offset))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data at offset %d: %w", offset, err)
+	// Check bounds carefully to avoid SIGBUS
+	if int64(offset) >= bm.mmapSize {
+		return nil, fmt.Errorf("offset %d exceeds mmap size %d", offset, bm.mmapSize)
 	}
+	if int64(offset)+int64(size) > bm.mmapSize {
+		return nil, fmt.Errorf("offset %d + size %d exceeds mmap size %d", offset, size, bm.mmapSize)
+	}
+
+	// Read directly from the mmap buffer
+	data := make([]byte, size)
+	copy(data, bm.mmapData[offset:offset+TmpOffset(size)])
 	return data, nil
 }
 

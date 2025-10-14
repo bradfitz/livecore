@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"time"
+	"unsafe"
 
 	"github.com/bradfitz/livecore/internal/buffer"
 	"golang.org/x/sys/unix"
@@ -298,41 +299,31 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 	// Get the offset for this VMA region in the temp file (once per VMA)
 	vmaOffset := pce.bufferManager.GetOffsetForVMA(uint64(vma.Start), uint64(vma.End-vma.Start))
 
-	// Copy pages in chunks to avoid too many syscalls
-	chunkSize := uint64(1024 * 1024) // 1MB chunks
-	for addr := start; addr < end; addr += chunkSize {
-		remaining := end - addr
-		if remaining < chunkSize {
-			chunkSize = remaining
-		}
+	// Get the mmap pointer for this VMA
+	mmapPtr, err := pce.bufferManager.GetMmapPointer(vmaOffset)
+	if err != nil {
+		return fmt.Errorf("failed to get mmap pointer: %w", err)
+	}
 
-		// Create local buffer
-		buf := make([]byte, chunkSize)
-
-		// Use process_vm_readv to copy memory
-		localIovec := unix.Iovec{
-			Base: &buf[0],
-			Len:  chunkSize,
-		}
-		remoteIovec := unix.RemoteIovec{
-			Base: uintptr(addr),
-			Len:  int(chunkSize),
-		}
-
-		_, err := unix.ProcessVMReadv(pce.pid, []unix.Iovec{localIovec}, []unix.RemoteIovec{remoteIovec}, 0)
-		if err != nil {
-			// Skip pages that can't be read (like vsyscall, etc.)
-			if err == unix.ENOENT || err == unix.EFAULT {
-				continue
+	// Copy the entire VMA in one ProcessVMReadv call
+	vmaSize := end - start
+	err = CopyMemoryToMmap(pce.pid, uintptr(start), vmaSize, mmapPtr)
+	if err != nil {
+		// Skip pages that can't be read (like vsyscall, etc.)
+		if err == unix.ENOENT || err == unix.EFAULT {
+			// Fill with zeros for unreadable pages
+			if pce.verbose {
+				log.Printf("Skipping unreadable VMA %x-%x: %v", vma.Start, vma.End, err)
 			}
-			return fmt.Errorf("failed to read memory at %x: %w", addr, err)
+			return nil
 		}
+		return fmt.Errorf("failed to read VMA %x-%x: %w", vma.Start, vma.End, err)
+	}
 
-		// Write the chunk data directly to the BufferManager
-		chunkOffset := vmaOffset + buffer.TmpOffset(addr-start)
-		if err := pce.bufferManager.WriteData(chunkOffset, buf); err != nil {
-			return fmt.Errorf("failed to write data to buffer manager: %w", err)
-		}
+	// No sync needed - we're reading from mmap memory directly
+
+	if pce.verbose {
+		log.Printf("copyVMA %x-%x: wrote %d bytes to offset %d", vma.Start, vma.End, vma.Size, vmaOffset)
 	}
 
 	return nil
@@ -342,6 +333,27 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 func GetPageSize() int {
 	// This would return the actual page size
 	return 4096
+}
+
+// CopyMemoryToMmap copies memory from a process to mmap using ProcessVMReadv
+func CopyMemoryToMmap(pid int, srcAddr uintptr, size uint64, mmapPtr unsafe.Pointer) error {
+	localIovec := unix.Iovec{
+		Base: (*byte)(mmapPtr),
+		Len:  size,
+	}
+	remoteIovec := unix.RemoteIovec{
+		Base: srcAddr,
+		Len:  int(size),
+	}
+
+	_, err := unix.ProcessVMReadv(pid, []unix.Iovec{localIovec}, []unix.RemoteIovec{remoteIovec}, 0)
+	if err != nil {
+		if err == unix.ENOENT || err == unix.EFAULT {
+			return err // Let caller decide how to handle unreadable memory
+		}
+		return fmt.Errorf("failed to read memory at %x: %w", srcAddr, err)
+	}
+	return nil
 }
 
 // AlignToPage aligns a value to page boundary

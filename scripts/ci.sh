@@ -138,22 +138,55 @@ else
     exit 1
 fi
 
-# Validate the core file with grf - this MUST succeed for CI to pass
-echo "Validating core file with grf..."
+# Create baseline with grf attach (the working way)
+echo "Creating baseline with grf attach..."
 GRF_PATH="$HOME/go/bin/grf"
 if [ -x "$GRF_PATH" ]; then
-    if "$GRF_PATH" core ./test/httpserver/httpserver test_httpserver.core; then
-        echo "✅ grf validation successful"
+    # First, create a baseline using grf attach
+    echo "Running grf attach to create baseline..."
+    if "$GRF_PATH" attach $SERVER_PID; then
+        echo "✅ grf attach successful"
         if [ -f "grf.out" ]; then
-            echo "✅ grf.out file created successfully"
-            ls -la grf.out
+            echo "✅ Baseline grf.out created"
+            mv grf.out grf_baseline.out
+            echo "Baseline grf.out size: $(wc -c < grf_baseline.out) bytes"
+        else
+            echo "❌ grf attach failed to create grf.out"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+        fi
+    else
+        echo "❌ grf attach FAILED - this is a CI failure"
+        kill $SERVER_PID 2>/dev/null || true
+        exit 1
+    fi
+    
+    # Now validate the core file with grf
+    echo "Validating core file with grf..."
+    if "$GRF_PATH" core ./test/httpserver/httpserver test_httpserver.core; then
+        echo "✅ grf core validation successful"
+        if [ -f "grf.out" ]; then
+            echo "✅ Core grf.out file created successfully"
+            echo "Core grf.out size: $(wc -c < grf.out) bytes"
+            
+            # Compare baseline vs core results
+            echo "Comparing baseline vs core results..."
+            if diff grf_baseline.out grf.out > /dev/null; then
+                echo "✅ Core dump matches baseline - validation successful"
+            else
+                echo "❌ Core dump differs from baseline - validation failed"
+                echo "Differences:"
+                diff grf_baseline.out grf.out || true
+                kill $SERVER_PID 2>/dev/null || true
+                exit 1
+            fi
         else
             echo "❌ grf.out file not found - this is a CI failure"
             kill $SERVER_PID 2>/dev/null || true
             exit 1
         fi
     else
-        echo "❌ grf validation FAILED - this is a CI failure"
+        echo "❌ grf core validation FAILED - this is a CI failure"
         echo "Core file validation is a critical requirement"
         kill $SERVER_PID 2>/dev/null || true
         exit 1
@@ -184,7 +217,7 @@ fi
 # Clean up
 echo "Cleaning up test processes..."
 kill $SERVER_PID 2>/dev/null || true
-rm -f test/httpserver/httpserver test_httpserver.core grf.out
+rm -f test/httpserver/httpserver test_httpserver.core grf.out grf_baseline.out
 
 # Report final status
 echo "✅ All core dump tests completed successfully"

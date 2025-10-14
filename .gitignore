@@ -2,3 +2,4 @@ livecore
 grf.out
 *.core
 test/httpserver/httpserver
+*.out

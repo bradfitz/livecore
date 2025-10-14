@@ -137,12 +137,51 @@ func CreateCoreNotes(pid int, threads []Thread, fileTable []FileEntry) ([]Note, 
 
 // createPRStatusNote creates a NT_PRSTATUS note
 func createPRStatusNote(thread Thread) Note {
-	// This is a simplified version - actual implementation would parse
-	// the register data from the thread
-	prstatus := make([]byte, 336) // Size of prstatus_t on x86-64
+	// prstatus_t structure for x86-64 (336 bytes total):
+	// - pr_info (siginfo_t): 16 bytes
+	// - pr_cursig (short): 2 bytes
+	// - padding: 2 bytes
+	// - pr_sigpend (unsigned long): 8 bytes
+	// - pr_sighold (unsigned long): 8 bytes
+	// - pr_pid (pid_t): 4 bytes
+	// - pr_ppid (pid_t): 4 bytes
+	// - pr_pgrp (pid_t): 4 bytes
+	// - pr_sid (pid_t): 4 bytes
+	// - pr_utime (timeval): 16 bytes
+	// - pr_stime (timeval): 16 bytes
+	// - pr_cutime (timeval): 16 bytes
+	// - pr_cstime (timeval): 16 bytes
+	// - pr_reg (elf_gregset_t): 216 bytes (27 x86-64 general purpose registers)
+	// - pr_fpvalid (int): 4 bytes
 
-	// Fill with zeros for now - actual register data would be populated
-	// from the thread's register state
+	prstatus := make([]byte, 336)
+
+	// Fill signal info with zeros (we're not capturing signal state)
+	// Offset 0-31: pr_info, pr_cursig, padding, pr_sigpend, pr_sighold (32 bytes)
+
+	// Set pr_pid (thread ID) at offset 32
+	binary.LittleEndian.PutUint32(prstatus[32:36], uint32(thread.Tid))
+
+	// Leave pr_ppid, pr_pgrp, pr_sid as zeros (offsets 36-48)
+
+	// Leave timing info as zeros (offsets 48-112)
+
+	// Copy register data starting at offset 112 (pr_reg field)
+	// The registers from the thread should be in the correct format already
+	if len(thread.Registers) > 0 {
+		regOffset := 112
+		regSize := 216 // Size of elf_gregset_t on x86-64
+
+		// Copy as much register data as we have, up to regSize
+		copyLen := len(thread.Registers)
+		if copyLen > regSize {
+			copyLen = regSize
+		}
+		copy(prstatus[regOffset:regOffset+copyLen], thread.Registers)
+	}
+
+	// pr_fpvalid at offset 328 (4 bytes) - set to 0 (no FPU info in this note)
+	// Already zero from make()
 
 	return Note{
 		Name: "CORE",

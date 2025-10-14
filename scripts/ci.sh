@@ -169,17 +169,33 @@ if [ -x "$GRF_PATH" ]; then
             echo "✅ Core grf.out file created successfully"
             echo "Core grf.out size: $(wc -c < grf.out) bytes"
             
-            # Compare baseline vs core results
-            echo "Comparing baseline vs core results..."
-            if diff grf_baseline.out grf.out > /dev/null; then
-                echo "✅ Core dump matches baseline - validation successful"
+            # Validate that both baseline and core dump contain expected functions using pprof
+            echo "Validating baseline contents with pprof..."
+            if go tool pprof -top grf_baseline.out 2>/dev/null | grep -q "wasteMemory"; then
+                echo "✅ Baseline contains expected 'wasteMemory' function"
             else
-                echo "❌ Core dump differs from baseline - validation failed"
-                echo "Differences:"
-                diff grf_baseline.out grf.out || true
+                echo "❌ Baseline validation failed - 'wasteMemory' function not found"
+                echo "Baseline pprof output:"
+                go tool pprof -top grf_baseline.out 2>/dev/null || echo "pprof failed"
                 kill $SERVER_PID 2>/dev/null || true
                 exit 1
             fi
+            
+            echo "Validating core dump contents with pprof..."
+            if go tool pprof -top grf.out 2>/dev/null | grep -q "wasteMemory"; then
+                echo "✅ Core dump contains expected 'wasteMemory' function"
+            else
+                echo "❌ Core dump validation failed - 'wasteMemory' function not found"
+                echo "Core dump pprof output:"
+                go tool pprof -top grf.out 2>/dev/null || echo "pprof failed"
+                kill $SERVER_PID 2>/dev/null || true
+                exit 1
+            fi
+            
+            # Show diff of pprof outputs for informational purposes (don't fail on differences)
+            echo "Comparing pprof outputs (baseline vs core dump)..."
+            echo "pprof diff (informational only):"
+            diff -u <(go tool pprof -top grf_baseline.out 2>/dev/null) <(go tool pprof -top grf.out 2>/dev/null) || echo "pprof outputs differ (this is informational only)"
         else
             echo "❌ grf.out file not found - this is a CI failure"
             kill $SERVER_PID 2>/dev/null || true

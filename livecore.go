@@ -263,12 +263,11 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA) error {
 		return fmt.Errorf("failed to get current dirty pages: %w", err)
 	}
 
+	// Copy only the dirty pages using process_vm_readv
+	// This is the minimal final copy to capture the exact state at freeze time
 	if config.Verbose {
 		fmt.Printf("Found %d dirty pages to copy\n", len(currentDirtyPages))
 	}
-
-	// Copy only the dirty pages using process_vm_readv
-	// This is the minimal final copy to capture the exact state at freeze time
 	for pageAddr := range currentDirtyPages {
 		if err := copyDirtyPage(config.Pid, pageAddr, config.OutputFile); err != nil {
 			// Log but don't fail - some pages might not be readable

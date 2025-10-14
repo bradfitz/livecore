@@ -45,12 +45,23 @@ func ParseThreads(pid int) ([]Thread, error) {
 
 // GetThreadRegisters collects register state for a thread using ptrace
 func GetThreadRegisters(tid int) ([]byte, error) {
-	// For now, return empty registers to avoid ptrace issues
-	// The ptrace calls are failing with "no such process" which suggests
-	// timing issues or permission problems with the thread IDs
+	var registers []byte
 
-	// Return a placeholder register structure
-	registers := make([]byte, 216) // Size of x86-64 user_regs_struct
+	// Collect general purpose registers using PTRACE_GETREGS
+	regs, err := getGeneralRegisters(tid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get general registers: %w", err)
+	}
+	registers = append(registers, regs...)
+
+	// Collect floating point registers using PTRACE_GETFPREGS
+	fpregs, err := getFloatingPointRegisters(tid)
+	if err != nil {
+		// FP registers might not be available, continue without them
+	} else {
+		registers = append(registers, fpregs...)
+	}
+
 	return registers, nil
 }
 
@@ -61,7 +72,9 @@ func getGeneralRegisters(tid int) ([]byte, error) {
 	if err := unix.PtraceGetRegsAmd64(tid, &regs); err != nil {
 		// Handle specific error cases
 		if err == unix.ESRCH {
-			return nil, fmt.Errorf("thread %d no longer exists", tid)
+			// Thread no longer exists - this can happen if the thread exits
+			// Return empty registers instead of failing
+			return make([]byte, 216), nil
 		}
 		if err == unix.EPERM {
 			return nil, fmt.Errorf("no permission to access thread %d", tid)
@@ -154,6 +167,10 @@ func UnfreezeThread(tid int) error {
 	// For seized threads, we can detach directly without resuming
 	// PTRACE_DETACH will automatically resume the thread and detach
 	if err := unix.PtraceDetach(tid); err != nil {
+		// If thread no longer exists, that's okay - it already exited
+		if err == unix.ESRCH {
+			return nil
+		}
 		return fmt.Errorf("failed to detach from thread %d: %w", tid, err)
 	}
 

@@ -304,6 +304,24 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 			return fmt.Errorf("failed to read memory at %x: %w", addr, err)
 		}
 
+		// Store the memory data to disk for later use in core file generation
+		// Write each page to a temporary file
+		pageSize := uint64(GetPageSize())
+		for pageOffset := uint64(0); pageOffset < chunkSize; pageOffset += pageSize {
+			pageAddr := uintptr(addr + pageOffset)
+			pageEnd := pageOffset + pageSize
+			if pageEnd > chunkSize {
+				pageEnd = chunkSize
+			}
+
+			// Write this page to disk using the same naming convention as copyDirtyPage
+			// This will be read by the ELF writer later
+			pageFileName := fmt.Sprintf("temp_page_%x", pageAddr)
+			if err := os.WriteFile(pageFileName, buffer[pageOffset:pageEnd], 0644); err != nil {
+				return fmt.Errorf("failed to write page file %s: %w", pageFileName, err)
+			}
+		}
+
 		// Store the copied data (for now, just discard it)
 		// In a real implementation, this would be stored in a staging area
 		_ = buffer

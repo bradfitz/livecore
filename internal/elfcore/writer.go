@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 // ELFWriter handles writing ELF core files
@@ -298,37 +300,45 @@ func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
 	return err
 }
 
-// readMemoryData reads memory data for a VMA from temporary page files
+// readMemoryData reads memory data for a VMA directly from the process
 func (w *ELFWriter) readMemoryData(vma VMA) ([]byte, error) {
 	// Create a buffer for the entire VMA
 	data := make([]byte, vma.Size())
 
-	// Calculate page size (assuming 4KB for now)
-	pageSize := uint64(4096)
+	// Read memory directly from the process using process_vm_readv
+	// This is more reliable than trying to read from temporary files
+	chunkSize := uint64(1024 * 1024) // 1MB chunks
+	for offset := uint64(0); offset < vma.Size(); offset += chunkSize {
+		remaining := vma.Size() - offset
+		if remaining < chunkSize {
+			chunkSize = remaining
+		}
 
-	// Read each page in the VMA
-	for offset := uint64(0); offset < vma.Size(); offset += pageSize {
-		pageAddr := vma.Start + uintptr(offset)
-		pageFileName := fmt.Sprintf("%s.tmp.page%x", w.outputFile, pageAddr)
+		// Create local buffer for this chunk
+		buffer := make([]byte, chunkSize)
 
-		// Try to read the page file
-		pageData, err := os.ReadFile(pageFileName)
+		// Use process_vm_readv to read memory directly
+		localIovec := unix.Iovec{
+			Base: &buffer[0],
+			Len:  chunkSize,
+		}
+		remoteIovec := unix.RemoteIovec{
+			Base: vma.Start + uintptr(offset),
+			Len:  int(chunkSize),
+		}
+
+		_, err := unix.ProcessVMReadv(w.info.Pid, []unix.Iovec{localIovec}, []unix.RemoteIovec{remoteIovec}, 0)
 		if err != nil {
-			// If file doesn't exist, fill with zeros
-			if os.IsNotExist(err) {
-				// Fill this page with zeros
-				clear(data[offset : offset+pageSize])
+			// If we can't read this memory, fill with zeros
+			if err == unix.ENOENT || err == unix.EFAULT {
+				clear(data[offset : offset+chunkSize])
 				continue
 			}
-			return nil, fmt.Errorf("failed to read page file %s: %w", pageFileName, err)
+			return nil, fmt.Errorf("failed to read memory at %x: %w", vma.Start+uintptr(offset), err)
 		}
 
-		// Copy the page data to the buffer
-		copySize := pageSize
-		if offset+pageSize > vma.Size() {
-			copySize = vma.Size() - offset
-		}
-		copy(data[offset:offset+copySize], pageData[:copySize])
+		// Copy the chunk data to the buffer
+		copy(data[offset:offset+chunkSize], buffer)
 	}
 
 	return data, nil

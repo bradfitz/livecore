@@ -96,28 +96,19 @@ func CreateCoreNotes(pid int, threads []Thread, fileTable []FileEntry) ([]Note, 
 
 	// NT_PRSTATUS for each thread
 	for _, thread := range threads {
-		prstatus, err := createPRStatusNote(thread)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create PRSTATUS note: %w", err)
-		}
+		prstatus := createPRStatusNote(thread)
 		notes = append(notes, prstatus)
 	}
 
 	// NT_FPREGSET for each thread
 	for _, thread := range threads {
-		fpregset, err := createFPRegsetNote(thread)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create FPREGSET note: %w", err)
-		}
+		fpregset := createFPRegsetNote(thread)
 		notes = append(notes, fpregset)
 	}
 
 	// NT_XSTATE for each thread
 	for _, thread := range threads {
-		xstate, err := createXStateNote(thread)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create XSTATE note: %w", err)
-		}
+		xstate := createXStateNote(thread)
 		notes = append(notes, xstate)
 	}
 
@@ -137,10 +128,7 @@ func CreateCoreNotes(pid int, threads []Thread, fileTable []FileEntry) ([]Note, 
 
 	// NT_FILE
 	if len(fileTable) > 0 {
-		file, err := createFileNote(fileTable)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create FILE note: %w", err)
-		}
+		file := createFileNote(fileTable)
 		notes = append(notes, file)
 	}
 
@@ -148,7 +136,7 @@ func CreateCoreNotes(pid int, threads []Thread, fileTable []FileEntry) ([]Note, 
 }
 
 // createPRStatusNote creates a NT_PRSTATUS note
-func createPRStatusNote(thread Thread) (Note, error) {
+func createPRStatusNote(thread Thread) Note {
 	// This is a simplified version - actual implementation would parse
 	// the register data from the thread
 	prstatus := make([]byte, 336) // Size of prstatus_t on x86-64
@@ -160,11 +148,11 @@ func createPRStatusNote(thread Thread) (Note, error) {
 		Name: "CORE",
 		Type: NT_PRSTATUS,
 		Data: prstatus,
-	}, nil
+	}
 }
 
 // createFPRegsetNote creates a NT_FPREGSET note
-func createFPRegsetNote(thread Thread) (Note, error) {
+func createFPRegsetNote(thread Thread) Note {
 	// FPU register set - 512 bytes for x87 + SSE
 	fpregset := make([]byte, 512)
 
@@ -172,11 +160,11 @@ func createFPRegsetNote(thread Thread) (Note, error) {
 		Name: "CORE",
 		Type: NT_FPREGSET,
 		Data: fpregset,
-	}, nil
+	}
 }
 
 // createXStateNote creates a NT_XSTATE note
-func createXStateNote(thread Thread) (Note, error) {
+func createXStateNote(thread Thread) Note {
 	// XSAVE state - variable size
 	xstate := make([]byte, 1024) // Simplified size
 
@@ -184,7 +172,7 @@ func createXStateNote(thread Thread) (Note, error) {
 		Name: "CORE",
 		Type: NT_XSTATE,
 		Data: xstate,
-	}, nil
+	}
 }
 
 // createPRPSInfoNote creates a NT_PRPSINFO note
@@ -227,7 +215,7 @@ func createAuxvNote(pid int) (Note, error) {
 }
 
 // createFileNote creates a NT_FILE note
-func createFileNote(fileTable []FileEntry) (Note, error) {
+func createFileNote(fileTable []FileEntry) Note {
 	var buf bytes.Buffer
 
 	// Write count
@@ -252,5 +240,5 @@ func createFileNote(fileTable []FileEntry) (Note, error) {
 		Name: "CORE",
 		Type: NT_FILE,
 		Data: buf.Bytes(),
-	}, nil
+	}
 }

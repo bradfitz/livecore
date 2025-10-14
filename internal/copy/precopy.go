@@ -1,6 +1,7 @@
 package copy
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -70,8 +71,11 @@ func (pm *PageMap) ClearSoftDirty() error {
 func (pm *PageMap) GetDirtyPages(vmas []VMA) (map[uintptr]bool, error) {
 	dirtyPages := make(map[uintptr]bool)
 
+	// Create a reusable buffer for pagemap reads
+	var buffer bytes.Buffer
+
 	for _, vma := range vmas {
-		if err := pm.scanVMAForDirtyPages(vma, dirtyPages); err != nil {
+		if err := pm.scanVMAForDirtyPages(vma, dirtyPages, &buffer); err != nil {
 			return nil, fmt.Errorf("failed to scan VMA %x-%x: %w", vma.Start, vma.End, err)
 		}
 	}
@@ -79,8 +83,8 @@ func (pm *PageMap) GetDirtyPages(vmas []VMA) (map[uintptr]bool, error) {
 	return dirtyPages, nil
 }
 
-// scanVMAForDirtyPages scans a VMA for dirty pages
-func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool) error {
+// scanVMAForDirtyPages scans a VMA for dirty pages using a reusable buffer
+func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool, buffer *bytes.Buffer) error {
 	pagemapPath := fmt.Sprintf("/proc/%d/pagemap", pm.pid)
 	file, err := os.Open(pagemapPath)
 	if err != nil {
@@ -92,41 +96,66 @@ func (pm *PageMap) scanVMAForDirtyPages(vma VMA, dirtyPages map[uintptr]bool) er
 	start := vma.Start &^ uintptr(pm.pageSize-1)
 	end := (vma.End + uintptr(pm.pageSize-1)) &^ uintptr(pm.pageSize-1)
 
-	// Read pagemap entries for this VMA
-	for addr := start; addr < end; addr += uintptr(pm.pageSize) {
-		if err := pm.checkPageDirty(file, addr, dirtyPages); err != nil {
-			return fmt.Errorf("failed to check page at %x: %w", addr, err)
-		}
+	// Calculate the number of pages in this VMA
+	numPages := int((end - start) / uintptr(pm.pageSize))
+	if numPages == 0 {
+		return nil
 	}
 
-	return nil
-}
+	// Calculate the total bytes needed for all pagemap entries
+	// Each pagemap entry is 8 bytes
+	totalBytes := numPages * 8
 
-// checkPageDirty checks if a specific page is dirty
-func (pm *PageMap) checkPageDirty(file *os.File, addr uintptr, dirtyPages map[uintptr]bool) error {
-	// Calculate pagemap entry offset
-	// Each pagemap entry is 8 bytes and represents one page
-	entryOffset := int64(addr / uintptr(pm.pageSize) * 8)
+	// Reset buffer for reuse
+	buffer.Reset()
 
-	// Read the pagemap entry
-	var entry [8]byte
-	n, err := file.ReadAt(entry[:], entryOffset)
+	// Ensure buffer has enough capacity
+	if buffer.Cap() < totalBytes {
+		buffer.Grow(totalBytes - buffer.Cap())
+	}
+
+	// Calculate the starting offset in the pagemap file
+	startOffset := int64(start / uintptr(pm.pageSize) * 8)
+
+	// Read all pagemap entries for this VMA in one system call
+	// Get available buffer space and ensure it's large enough
+	available := buffer.AvailableBuffer()
+	if len(available) < totalBytes {
+		// If available buffer is too small, we need to grow more
+		buffer.Grow(totalBytes - len(available))
+		available = buffer.AvailableBuffer()
+	}
+	readBuffer := available[:totalBytes]
+	n, err := file.ReadAt(readBuffer, startOffset)
 	if err != nil {
-		// Skip pages that can't be read (like vsyscall, etc.)
+		// Skip VMAs that can't be read (like vsyscall, etc.)
 		if err == os.ErrNotExist || n == 0 {
 			return nil
 		}
-		return fmt.Errorf("failed to read pagemap entry: %w", err)
+		return fmt.Errorf("failed to read pagemap entries: %w", err)
 	}
 
-	// Parse the entry
-	// Bit 55 is the soft-dirty bit
-	entryValue := uint64(entry[0]) | uint64(entry[1])<<8 | uint64(entry[2])<<16 | uint64(entry[3])<<24 |
-		uint64(entry[4])<<32 | uint64(entry[5])<<40 | uint64(entry[6])<<48 | uint64(entry[7])<<56
-	softDirty := (entryValue & (1 << 55)) != 0
+	// Process each pagemap entry from the buffer
+	for i := 0; i < numPages; i++ {
+		addr := start + uintptr(i*pm.pageSize)
+		entryOffset := i * 8
 
-	if softDirty {
-		dirtyPages[addr] = true
+		// Check if we have enough data for this entry
+		if entryOffset+8 > len(readBuffer) {
+			break
+		}
+
+		// Parse the entry from the buffer
+		entry := readBuffer[entryOffset : entryOffset+8]
+		entryValue := uint64(entry[0]) | uint64(entry[1])<<8 | uint64(entry[2])<<16 | uint64(entry[3])<<24 |
+			uint64(entry[4])<<32 | uint64(entry[5])<<40 | uint64(entry[6])<<48 | uint64(entry[7])<<56
+
+		// Bit 55 is the soft-dirty bit
+		softDirty := (entryValue & (1 << 55)) != 0
+
+		if softDirty {
+			dirtyPages[addr] = true
+		}
 	}
 
 	return nil
@@ -287,7 +316,10 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 	t0 := time.Now()
 	if pce.verbose {
 		defer func() {
-			log.Printf("copyVMA %x-%x (%d bytes) took %v", vma.Start, vma.End, vma.Size, time.Since(t0))
+			d := time.Since(t0)
+			if d > 10*time.Millisecond {
+				log.Printf("copyVMA %x-%x (%d bytes) took %v", vma.Start, vma.End, vma.Size, d)
+			}
 		}()
 	}
 
@@ -321,10 +353,6 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 	}
 
 	// No sync needed - we're reading from mmap memory directly
-
-	if pce.verbose {
-		log.Printf("copyVMA %x-%x: wrote %d bytes to offset %d", vma.Start, vma.End, vma.Size, vmaOffset)
-	}
 
 	return nil
 }

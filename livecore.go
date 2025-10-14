@@ -293,7 +293,7 @@ func copyRemainingDirtyPages(config *Config, vmas []proc.VMA, bufferManager *buf
 			}
 		}
 		if config.Verbose {
-			log.Printf("Copied page at %x in %v", pageAddr, time.Since(t0))
+			log.Printf("Copied final dirty page at %x in %v", pageAddr, time.Since(t0))
 		}
 	}
 

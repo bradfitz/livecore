@@ -2,6 +2,7 @@ package copy
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -156,8 +157,18 @@ type VMA struct {
 	Start uintptr
 	End   uintptr
 	Size  uint64
+	Perms Perm
 	// Add other fields as needed
 }
+
+// Perm represents memory permissions
+type Perm uint8
+
+const (
+	PermRead  Perm = 1 << 0
+	PermWrite Perm = 1 << 1
+	PermExec  Perm = 1 << 2
+)
 
 // PreCopyResult contains the result of pre-copy
 type PreCopyResult struct {
@@ -272,10 +283,20 @@ func (pce *PreCopyEngine) copyAllPages(vmas []VMA) error {
 
 // copyVMA copies a single VMA
 func (pce *PreCopyEngine) copyVMA(vma VMA) error {
+	t0 := time.Now()
+	if pce.verbose {
+		defer func() {
+			log.Printf("copyVMA %x-%x (%d bytes) took %v", vma.Start, vma.End, vma.Size, time.Since(t0))
+		}()
+	}
+
 	// Calculate page-aligned boundaries
 	pageSize := uint64(GetPageSize())
 	start := uint64(vma.Start) &^ (pageSize - 1)
 	end := (uint64(vma.End) + pageSize - 1) &^ (pageSize - 1)
+
+	// Get the offset for this VMA region in the temp file (once per VMA)
+	vmaOffset := pce.bufferManager.GetOffsetForVMA(uint64(vma.Start), uint64(vma.End-vma.Start))
 
 	// Copy pages in chunks to avoid too many syscalls
 	chunkSize := uint64(1024 * 1024) // 1MB chunks
@@ -306,10 +327,6 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 			}
 			return fmt.Errorf("failed to read memory at %x: %w", addr, err)
 		}
-
-		// Store the memory data in the BufferManager
-		// Get the offset for this VMA region in the temp file
-		vmaOffset := pce.bufferManager.GetOffsetForVMA(uint64(vma.Start), uint64(vma.End-vma.Start))
 
 		// Write the chunk data directly to the BufferManager
 		chunkOffset := vmaOffset + (addr - start)

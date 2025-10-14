@@ -116,7 +116,29 @@ func (vma *VMA) IsDumpable() bool {
 		return false
 	}
 
+	// Skip vsyscall pages - they're not readable and not useful for debugging
+	if isVsyscallVMA(vma) {
+		return false
+	}
+
+	// Skip non-readable VMAs - they won't have useful data
+	if !isReadableVMA(vma) {
+		return false
+	}
+
 	return true
+}
+
+// isVsyscallVMA checks if a VMA is a vsyscall page
+func isVsyscallVMA(vma *VMA) bool {
+	// vsyscall pages are typically at 0xffffffffff600000-0xffffffffff601000
+	return vma.Start >= 0xffffffffff600000 && vma.Start < 0xffffffffff601000
+}
+
+// isReadableVMA checks if a VMA should be readable based on its permissions
+func isReadableVMA(vma *VMA) bool {
+	// Only include VMAs that are readable or writable (not just executable)
+	return vma.Perms&(PermRead|PermWrite) != 0
 }
 
 // Size returns the size of the VMA.

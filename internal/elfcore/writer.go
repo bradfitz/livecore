@@ -307,8 +307,8 @@ func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
 
 	// Punch hole in the BufferManager to free disk space
 	// Get the offset for this VMA in the BufferManager
-	vmaOffset := w.bufferManager.GetOffsetForVMA(uint64(segment.VMA.Start), segment.VMA.Size())
-	if err := w.bufferManager.PunchHole(vmaOffset, segment.VMA.Size()); err != nil {
+	tmpOffset := w.bufferManager.GetOffsetForVMA(uint64(segment.VMA.Start), segment.VMA.Size())
+	if err := w.bufferManager.PunchHole(tmpOffset, segment.VMA.Size()); err != nil {
 		// Log but don't fail - hole punching is best effort
 		fmt.Printf("Warning: failed to punch hole for VMA %x-%x: %v\n",
 			segment.VMA.Start, segment.VMA.End, err)
@@ -319,13 +319,17 @@ func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
 
 // readMemoryData reads memory data for a VMA from the BufferManager
 func (w *ELFWriter) readMemoryData(vma VMA) ([]byte, error) {
-	// Get the offset for this VMA in the BufferManager
-	vmaOffset := w.bufferManager.GetOffsetForVMA(uint64(vma.Start), vma.Size())
+	// Get the offset for this VMA in the BufferManager (only if it exists)
+	vmaOffset, ok := w.bufferManager.GetExistingOffsetForVMA(uint64(vma.Start), vma.Size())
+	if !ok {
+		return nil, fmt.Errorf("VMA %x-%x was not copied during pre-copy phase", vma.Start, vma.End)
+	}
 
 	// Read the data from the BufferManager
 	data, err := w.bufferManager.ReadData(vmaOffset, vma.Size())
 	if err != nil {
-		return nil, fmt.Errorf("failed to read VMA data from buffer manager: %w", err)
+		// This is a real error - the VMA should have been copied during pre-copy
+		return nil, fmt.Errorf("failed to read VMA data from buffer manager for %x-%x: %w", vma.Start, vma.End, err)
 	}
 
 	return data, nil

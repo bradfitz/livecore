@@ -341,6 +341,7 @@ func convertVMAsToCopy(vmas []proc.VMA) []copy.VMA {
 			Start: vma.Start,
 			End:   vma.End,
 			Size:  vma.MemSize,
+			Perms: copy.Perm(vma.Perms),
 		})
 	}
 	return result

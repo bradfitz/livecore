@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -18,7 +19,9 @@ type offAndSize struct {
 
 // Manager manages a temporary file for buffering memory data.
 type Manager struct {
-	file        *os.File
+	file *os.File
+
+	mu          sync.Mutex            // Protects allocations and nextOffset
 	allocations map[offAndSize]uint64 // VMA offset+size -> temp file offset
 	nextOffset  uint64                // Next available offset in temp file
 	fsBlockSize uint64                // Filesystem block size for alignment
@@ -33,7 +36,7 @@ func NewBufferManager(outputFile string) (*Manager, error) {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tempPath := tempFile.Name()
-	os.Remove(tempPath)
+	os.Remove(tempPath) // so it doesn't persist after the program exits; we'll use the open fd only
 
 	// Get filesystem block size for alignment
 	fsBlockSize, err := getFilesystemBlockSize(tempFile)
@@ -63,6 +66,9 @@ func getFilesystemBlockSize(file *os.File) (uint64, error) {
 
 // GetOffsetForVMA returns the offset in the temp file for the given VMA
 func (bm *Manager) GetOffsetForVMA(vmaStart, vmaSize uint64) uint64 {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
 	key := offAndSize{Offset: vmaStart, Size: vmaSize}
 
 	if offset, ok := bm.allocations[key]; ok {
@@ -77,14 +83,12 @@ func (bm *Manager) GetOffsetForVMA(vmaStart, vmaSize uint64) uint64 {
 	return alignedOffset
 }
 
-// GetFile returns the temporary file for direct I/O operations
-func (bm *Manager) GetFile() *os.File {
-	return bm.file
-}
-
-// GetFilesystemBlockSize returns the filesystem block size
-func (bm *Manager) GetFilesystemBlockSize() uint64 {
-	return bm.fsBlockSize
+// GetExistingOffsetForVMA returns the offset in the temp file for the given VMA if it exists
+func (bm *Manager) GetExistingOffsetForVMA(vmaStart, vmaSize uint64) (tmpOffset uint64, ok bool) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	tmpOffset, ok = bm.allocations[offAndSize{Offset: vmaStart, Size: vmaSize}]
+	return
 }
 
 // PunchHole punches a hole in the temp file to free disk space

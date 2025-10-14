@@ -142,6 +142,10 @@ func getFloatingPointRegisters(tid int) ([]byte, error) {
 	// For now, return empty FPU registers
 	// TODO: Implement actual PTRACE_GETFPREGS call
 	// The floating point registers are optional and can be empty
+
+	// NOTE(bradfitz): don't really care for gorefs (grf) purposes, as these can't
+	// contain pointers.
+
 	fpregisters := make([]byte, 0)
 
 	return fpregisters, nil

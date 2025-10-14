@@ -10,6 +10,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// TmpOffset represents an offset in the temporary file.
+type TmpOffset int64
+
 // offAndSize is a comparable map key to represent a memory region by
 // its offset (in the target PID) and size.
 type offAndSize struct {
@@ -21,10 +24,10 @@ type offAndSize struct {
 type Manager struct {
 	file *os.File
 
-	mu          sync.Mutex            // Protects allocations and nextOffset
-	allocations map[offAndSize]uint64 // VMA offset+size -> temp file offset
-	nextOffset  uint64                // Next available offset in temp file
-	fsBlockSize uint64                // Filesystem block size for alignment
+	mu          sync.Mutex               // Protects allocations and nextOffset.
+	allocations map[offAndSize]TmpOffset // VMA offset+size -> temp file offset.
+	nextOffset  TmpOffset                // Next available offset in temp file.
+	fsBlockSize uint64                   // Filesystem block size for alignment.
 }
 
 // NewBufferManager creates a new BufferManager with a temporary file
@@ -47,7 +50,7 @@ func NewBufferManager(outputFile string) (*Manager, error) {
 
 	bm := &Manager{
 		file:        tempFile,
-		allocations: make(map[offAndSize]uint64),
+		allocations: make(map[offAndSize]TmpOffset),
 		nextOffset:  0,
 		fsBlockSize: fsBlockSize,
 	}
@@ -64,8 +67,8 @@ func getFilesystemBlockSize(file *os.File) (uint64, error) {
 	return uint64(stat.Blksize), nil
 }
 
-// GetOffsetForVMA returns the offset in the temp file for the given VMA
-func (bm *Manager) GetOffsetForVMA(vmaStart, vmaSize uint64) uint64 {
+// GetOffsetForVMA returns the offset in the temp file for the given VMA.
+func (bm *Manager) GetOffsetForVMA(vmaStart, vmaSize uint64) TmpOffset {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
@@ -76,23 +79,23 @@ func (bm *Manager) GetOffsetForVMA(vmaStart, vmaSize uint64) uint64 {
 	}
 
 	// Allocate new space, aligned to filesystem block size
-	alignedOffset := (bm.nextOffset + bm.fsBlockSize - 1) &^ (bm.fsBlockSize - 1)
+	alignedOffset := TmpOffset((bm.nextOffset + TmpOffset(bm.fsBlockSize) - 1) &^ (TmpOffset(bm.fsBlockSize) - 1))
 	bm.allocations[key] = alignedOffset
-	bm.nextOffset = alignedOffset + vmaSize
+	bm.nextOffset = alignedOffset + TmpOffset(vmaSize)
 
 	return alignedOffset
 }
 
-// GetExistingOffsetForVMA returns the offset in the temp file for the given VMA if it exists
-func (bm *Manager) GetExistingOffsetForVMA(vmaStart, vmaSize uint64) (tmpOffset uint64, ok bool) {
+// GetExistingOffsetForVMA returns the offset in the temp file for the given VMA if it exists.
+func (bm *Manager) GetExistingOffsetForVMA(vmaStart, vmaSize uint64) (tmpOffset TmpOffset, ok bool) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 	tmpOffset, ok = bm.allocations[offAndSize{Offset: vmaStart, Size: vmaSize}]
 	return
 }
 
-// PunchHole punches a hole in the temp file to free disk space
-func (bm *Manager) PunchHole(offset, length uint64) error {
+// PunchHole punches a hole in the temp file to free disk space.
+func (bm *Manager) PunchHole(offset TmpOffset, length uint64) error {
 	// Use fallocate with FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE
 	// This requires the file to be opened with O_RDWR
 	err := unix.Fallocate(int(bm.file.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, int64(offset), int64(length))
@@ -110,8 +113,8 @@ func (bm *Manager) Close() error {
 	return nil
 }
 
-// ReadData reads data from the temp file at the given offset
-func (bm *Manager) ReadData(offset, size uint64) ([]byte, error) {
+// ReadData reads data from the temp file at the given offset.
+func (bm *Manager) ReadData(offset TmpOffset, size uint64) ([]byte, error) {
 	data := make([]byte, size)
 	_, err := bm.file.ReadAt(data, int64(offset))
 	if err != nil {
@@ -120,8 +123,8 @@ func (bm *Manager) ReadData(offset, size uint64) ([]byte, error) {
 	return data, nil
 }
 
-// WriteData writes data to the temp file at the given offset
-func (bm *Manager) WriteData(offset uint64, data []byte) error {
+// WriteData writes data to the temp file at the given offset.
+func (bm *Manager) WriteData(offset TmpOffset, data []byte) error {
 	_, err := bm.file.WriteAt(data, int64(offset))
 	if err != nil {
 		return fmt.Errorf("failed to write data at offset %d: %w", offset, err)

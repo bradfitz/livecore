@@ -307,11 +307,11 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 		}
 
 		// Create local buffer
-		buffer := make([]byte, chunkSize)
+		buf := make([]byte, chunkSize)
 
 		// Use process_vm_readv to copy memory
 		localIovec := unix.Iovec{
-			Base: &buffer[0],
+			Base: &buf[0],
 			Len:  chunkSize,
 		}
 		remoteIovec := unix.RemoteIovec{
@@ -329,8 +329,8 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 		}
 
 		// Write the chunk data directly to the BufferManager
-		chunkOffset := vmaOffset + (addr - start)
-		if err := pce.bufferManager.WriteData(chunkOffset, buffer); err != nil {
+		chunkOffset := vmaOffset + buffer.TmpOffset(addr-start)
+		if err := pce.bufferManager.WriteData(chunkOffset, buf); err != nil {
 			return fmt.Errorf("failed to write data to buffer manager: %w", err)
 		}
 	}

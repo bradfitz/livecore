@@ -18,7 +18,6 @@ type PreCopyEngine struct {
 	maxPasses      int
 	dirtyThreshold float64
 	pageMap        *PageMap
-	workerPool     *WorkerPool
 	bufferManager  *buffer.Manager
 	verbose        bool
 }
@@ -30,7 +29,6 @@ func NewPreCopyEngine(pid int, maxPasses int, dirtyThreshold float64, workers in
 		maxPasses:      maxPasses,
 		dirtyThreshold: dirtyThreshold,
 		pageMap:        NewPageMap(pid),
-		workerPool:     NewWorkerPool(workers),
 		bufferManager:  bufferManager,
 		verbose:        verbose,
 	}
@@ -216,10 +214,6 @@ func (pce *PreCopyEngine) RunPreCopy(vmas []VMA) (*PreCopyResult, error) {
 	}
 
 	startTime := time.Now()
-
-	// Start worker pool
-	pce.workerPool.Start()
-	defer pce.workerPool.Stop()
 
 	// Clear soft-dirty bits
 	if err := pce.pageMap.ClearSoftDirty(); err != nil {

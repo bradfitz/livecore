@@ -2,6 +2,7 @@ package buffer
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -146,20 +147,20 @@ func (bm *Manager) Close() error {
 	return nil
 }
 
-// ReadData reads data from the mmap buffer at the given offset.
-func (bm *Manager) ReadData(offset TmpOffset, size uint64) ([]byte, error) {
+// WriteDataTo writes data directly from the mmap buffer to the given io.WriterAt.
+// This avoids allocations by writing directly from the mmapped memory.
+func (bm *Manager) WriteDataTo(writer io.WriterAt, writerOffset int64, tmpOffset TmpOffset, size uint64) error {
 	// Check bounds carefully to avoid SIGBUS
-	if int64(offset) >= bm.mmapSize {
-		return nil, fmt.Errorf("offset %d exceeds mmap size %d", offset, bm.mmapSize)
+	if int64(tmpOffset) >= bm.mmapSize {
+		return fmt.Errorf("offset %d exceeds mmap size %d", tmpOffset, bm.mmapSize)
 	}
-	if int64(offset)+int64(size) > bm.mmapSize {
-		return nil, fmt.Errorf("offset %d + size %d exceeds mmap size %d", offset, size, bm.mmapSize)
+	if int64(tmpOffset)+int64(size) > bm.mmapSize {
+		return fmt.Errorf("offset %d + size %d exceeds mmap size %d", tmpOffset, size, bm.mmapSize)
 	}
 
-	// Read directly from the mmap buffer
-	data := make([]byte, size)
-	copy(data, bm.mmapData[offset:offset+TmpOffset(size)])
-	return data, nil
+	// Write directly from the mmap buffer to the target writer
+	_, err := writer.WriteAt(bm.mmapData[tmpOffset:tmpOffset+TmpOffset(size)], writerOffset)
+	return err
 }
 
 // WriteData writes data to the temp file at the given offset.

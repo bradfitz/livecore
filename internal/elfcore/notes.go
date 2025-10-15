@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // NoteWriter handles writing ELF notes
@@ -224,17 +226,107 @@ func createXStateNote(thread Thread) Note {
 func createPRPSInfoNote(pid int) (Note, error) {
 	// Read process info from /proc/<pid>/stat
 	statPath := fmt.Sprintf("/proc/%d/stat", pid)
-	_, err := os.ReadFile(statPath)
+	statData, err := os.ReadFile(statPath)
 	if err != nil {
 		return Note{}, fmt.Errorf("failed to read stat: %w", err)
 	}
 
-	// Parse stat data and create prpsinfo structure
-	// This is simplified - actual implementation would parse the stat file
-	prpsinfo := make([]byte, 136) // Size of prpsinfo_t
+	// Read command line
+	cmdlinePath := fmt.Sprintf("/proc/%d/cmdline", pid)
+	cmdlineData, err := os.ReadFile(cmdlinePath)
+	if err != nil {
+		cmdlineData = []byte{} // Empty if can't read
+	}
 
-	// Fill with basic info
-	copy(prpsinfo[0:16], []byte("test_program")) // pr_fname
+	// Parse stat data
+	statStr := string(statData)
+	fields := strings.Fields(statStr)
+	if len(fields) < 4 {
+		return Note{}, fmt.Errorf("invalid stat format")
+	}
+
+	// Create prpsinfo structure (136 bytes for x86-64)
+	prpsinfo := make([]byte, 136)
+
+	// pr_state (offset 0, 1 byte)
+	if len(fields) > 2 {
+		prpsinfo[0] = fields[2][0] // Process state character
+	}
+
+	// pr_sname (offset 1, 1 byte) - same as state
+	prpsinfo[1] = prpsinfo[0]
+
+	// pr_zomb (offset 2, 1 byte) - 1 if zombie
+	if prpsinfo[0] == 'Z' {
+		prpsinfo[2] = 1
+	}
+
+	// pr_nice (offset 3, 1 byte) - nice value
+	if len(fields) > 18 {
+		if nice, err := strconv.Atoi(fields[18]); err == nil {
+			prpsinfo[3] = byte(nice)
+		}
+	}
+
+	// pr_flag (offset 8, 8 bytes) - process flags
+	if len(fields) > 8 {
+		if flags, err := strconv.ParseUint(fields[8], 10, 64); err == nil {
+			binary.LittleEndian.PutUint64(prpsinfo[8:16], flags)
+		}
+	}
+
+	// pr_uid, pr_gid (offset 16, 4 bytes each) - set to 0 for now
+	// These would need to be read from /proc/<pid>/status
+
+	// pr_pid (offset 24, 4 bytes)
+	binary.LittleEndian.PutUint32(prpsinfo[24:28], uint32(pid))
+
+	// pr_ppid (offset 28, 4 bytes)
+	if len(fields) > 3 {
+		if ppid, err := strconv.Atoi(fields[3]); err == nil {
+			binary.LittleEndian.PutUint32(prpsinfo[28:32], uint32(ppid))
+		}
+	}
+
+	// pr_pgrp (offset 32, 4 bytes) - process group ID
+	if len(fields) > 4 {
+		if pgrp, err := strconv.Atoi(fields[4]); err == nil {
+			binary.LittleEndian.PutUint32(prpsinfo[32:36], uint32(pgrp))
+		}
+	}
+
+	// pr_sid (offset 36, 4 bytes) - session ID
+	if len(fields) > 5 {
+		if sid, err := strconv.Atoi(fields[5]); err == nil {
+			binary.LittleEndian.PutUint32(prpsinfo[36:40], uint32(sid))
+		}
+	}
+
+	// pr_fname (offset 40, 16 bytes) - executable name
+	execName := "unknown"
+	if len(fields) > 1 {
+		// Remove parentheses from comm field
+		comm := fields[1]
+		if len(comm) > 2 && comm[0] == '(' && comm[len(comm)-1] == ')' {
+			execName = comm[1 : len(comm)-1]
+		}
+	}
+	if len(execName) > 15 {
+		execName = execName[:15] // Truncate to fit
+	}
+	copy(prpsinfo[40:56], []byte(execName))
+
+	// pr_psargs (offset 56, 80 bytes) - command line arguments
+	if len(cmdlineData) > 0 {
+		// Replace null bytes with spaces
+		args := bytes.ReplaceAll(cmdlineData, []byte{0}, []byte{' '})
+		// Trim trailing spaces
+		args = bytes.TrimRight(args, " ")
+		if len(args) > 79 {
+			args = args[:79]
+		}
+		copy(prpsinfo[56:136], args)
+	}
 
 	return Note{
 		Name: "CORE",
@@ -250,6 +342,32 @@ func createAuxvNote(pid int) (Note, error) {
 	auxvData, err := os.ReadFile(auxvPath)
 	if err != nil {
 		return Note{}, fmt.Errorf("failed to read auxv: %w", err)
+	}
+
+	// Validate that auxv data is properly formatted (should be pairs of 8-byte values)
+	if len(auxvData)%16 != 0 {
+		return Note{}, fmt.Errorf("invalid auxv data length: %d (should be multiple of 16)", len(auxvData))
+	}
+
+	// The auxv data should end with AT_NULL (type=0, value=0)
+	// This is a 16-byte entry of all zeros at the end
+	if len(auxvData) >= 16 {
+		// Check if the last 16 bytes are all zeros (AT_NULL entry)
+		lastEntry := auxvData[len(auxvData)-16:]
+		allZeros := true
+		for _, b := range lastEntry {
+			if b != 0 {
+				allZeros = false
+				break
+			}
+		}
+		if !allZeros {
+			// Add AT_NULL terminator if missing
+			auxvData = append(auxvData, make([]byte, 16)...)
+		}
+	} else if len(auxvData) == 0 {
+		// If no auxv data, create minimal AT_NULL entry
+		auxvData = make([]byte, 16)
 	}
 
 	return Note{

@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/binary"
 	"fmt"
@@ -85,59 +86,46 @@ func getGeneralRegisters(tid int) ([]byte, error) {
 		return nil, fmt.Errorf("failed to get registers for thread %d: %w", tid, err)
 	}
 
-	// Convert the registers struct to bytes using binary encoding
-	// This creates the raw register data that will be written to the core file
-	registers := make([]byte, 0, 216) // Approximate size of x86-64 registers
+	// Create register data in the exact format expected by ELF core files
+	// This must match the user_regs_struct layout from the Linux kernel
+	registers := make([]byte, 216) // Exact size for x86-64 elf_gregset_t
 
-	// Serialize the register structure to bytes in the format expected by the core file
-	// We need to encode the register values in little-endian format
-	buf := make([]byte, 8) // Buffer for 64-bit values
+	// Use binary.Write for proper serialization
+	buf := bytes.NewBuffer(registers[:0])
 
-	// Write general purpose registers (in order expected by core file format)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R15))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R14))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R13))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R12))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rbp))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rbx))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R11))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R10))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R9))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.R8))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rax))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rcx))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rdx))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rsi))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rdi))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Orig_rax))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rip))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Cs))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Eflags))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Rsp))
-	registers = append(registers, buf...)
-	binary.LittleEndian.PutUint64(buf, uint64(regs.Ss))
-	registers = append(registers, buf...)
+	// Write registers in the standard ELF core order (user_regs_struct)
+	binary.Write(buf, binary.LittleEndian, regs.R15)
+	binary.Write(buf, binary.LittleEndian, regs.R14)
+	binary.Write(buf, binary.LittleEndian, regs.R13)
+	binary.Write(buf, binary.LittleEndian, regs.R12)
+	binary.Write(buf, binary.LittleEndian, regs.Rbp)
+	binary.Write(buf, binary.LittleEndian, regs.Rbx)
+	binary.Write(buf, binary.LittleEndian, regs.R11)
+	binary.Write(buf, binary.LittleEndian, regs.R10)
+	binary.Write(buf, binary.LittleEndian, regs.R9)
+	binary.Write(buf, binary.LittleEndian, regs.R8)
+	binary.Write(buf, binary.LittleEndian, regs.Rax)
+	binary.Write(buf, binary.LittleEndian, regs.Rcx)
+	binary.Write(buf, binary.LittleEndian, regs.Rdx)
+	binary.Write(buf, binary.LittleEndian, regs.Rsi)
+	binary.Write(buf, binary.LittleEndian, regs.Rdi)
+	binary.Write(buf, binary.LittleEndian, regs.Orig_rax)
+	binary.Write(buf, binary.LittleEndian, regs.Rip)
+	binary.Write(buf, binary.LittleEndian, regs.Cs)
+	binary.Write(buf, binary.LittleEndian, regs.Eflags)
+	binary.Write(buf, binary.LittleEndian, regs.Rsp)
+	binary.Write(buf, binary.LittleEndian, regs.Ss)
 
-	return registers, nil
+	// Add remaining fields to reach 216 bytes (27 * 8 bytes)
+	// These are typically fs_base, gs_base, ds, es, fs, gs
+	binary.Write(buf, binary.LittleEndian, uint64(0)) // fs_base
+	binary.Write(buf, binary.LittleEndian, uint64(0)) // gs_base
+	binary.Write(buf, binary.LittleEndian, uint64(0)) // ds
+	binary.Write(buf, binary.LittleEndian, uint64(0)) // es
+	binary.Write(buf, binary.LittleEndian, uint64(0)) // fs
+	binary.Write(buf, binary.LittleEndian, uint64(0)) // gs
+
+	return buf.Bytes(), nil
 }
 
 // getFloatingPointRegisters gets floating point registers using PTRACE_GETFPREGS

@@ -440,8 +440,6 @@ func copyDirtyPage(pid int, pageAddr uintptr, vma copy.VMA, bufferManager *buffe
 	return nil
 }
 
-// Note: cleanupTempPageFiles removed - no longer using temp files
-
 // convertThreads converts proc.Thread to elfcore.Thread
 func convertThreads(threads []proc.Thread) []elfcore.Thread {
 	var result []elfcore.Thread

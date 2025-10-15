@@ -1,9 +1,12 @@
 package proc
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 
 	"golang.org/x/sys/unix"
@@ -181,26 +184,40 @@ func UnfreezeThread(tid int) error {
 	return nil
 }
 
-// FreezeAllThreads freezes all threads in a process
+// FreezeAllThreads freezes all threads in a process and returns them sorted by tid.
 func FreezeAllThreads(pid int) ([]Thread, error) {
-	threads, err := ParseThreads(pid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse threads: %w", err)
-	}
-
-	var frozenThreads []Thread
-	for _, thread := range threads {
-		if err := FreezeThread(thread.Tid); err != nil {
-			// If we can't freeze a thread, we should unfreeze the ones we did freeze
-			for _, frozen := range frozenThreads {
-				UnfreezeThread(frozen.Tid)
-			}
-			return nil, fmt.Errorf("failed to freeze thread %d: %w", thread.Tid, err)
+	frozen := make(map[int]Thread) // by tid
+	for {
+		threads, err := ParseThreads(pid)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse threads: %w", err)
 		}
-		frozenThreads = append(frozenThreads, thread)
-	}
+		newCount := 0
 
-	return frozenThreads, nil
+		for _, thread := range threads {
+			if _, ok := frozen[thread.Tid]; ok {
+				// already frozen
+				continue
+			}
+			if err := FreezeThread(thread.Tid); err != nil {
+				// If we can't freeze a thread, we should unfreeze the ones we did freeze
+				for tid := range frozen {
+					UnfreezeThread(tid)
+				}
+				return nil, fmt.Errorf("failed to freeze thread %d: %w", thread.Tid, err)
+			}
+
+			frozen[thread.Tid] = thread
+			newCount++
+		}
+		if newCount == 0 {
+			ts := slices.Collect(maps.Values(frozen))
+			slices.SortFunc(ts, func(a, b Thread) int {
+				return cmp.Compare(a.Tid, b.Tid)
+			})
+			return ts, nil
+		}
+	}
 }
 
 // UnfreezeAllThreads unfreezes all threads in a process

@@ -263,16 +263,25 @@ func createAuxvNote(pid int) (Note, error) {
 func createFileNote(fileTable []FileEntry) Note {
 	var buf bytes.Buffer
 
-	// Write count
-	binary.LittleEndian.PutUint64(buf.Bytes(), uint64(len(fileTable)))
+	// Temporary buffer for binary encoding
+	tmp := make([]byte, 8)
 
-	// Write file entries
+	// Write count (number of entries)
+	binary.LittleEndian.PutUint64(tmp, uint64(len(fileTable)))
+	buf.Write(tmp)
+
+	// Write page size
+	binary.LittleEndian.PutUint64(tmp, 4096)
+	buf.Write(tmp)
+
+	// Write file entries (start, end, file offset)
 	for _, entry := range fileTable {
-		binary.LittleEndian.PutUint64(buf.Bytes(), uint64(entry.Start))
-		binary.LittleEndian.PutUint64(buf.Bytes(), uint64(entry.End))
-		binary.LittleEndian.PutUint64(buf.Bytes(), entry.FileOfs)
-		binary.LittleEndian.PutUint64(buf.Bytes(), entry.Dev)
-		binary.LittleEndian.PutUint64(buf.Bytes(), entry.Inode)
+		binary.LittleEndian.PutUint64(tmp, uint64(entry.Start))
+		buf.Write(tmp)
+		binary.LittleEndian.PutUint64(tmp, uint64(entry.End))
+		buf.Write(tmp)
+		binary.LittleEndian.PutUint64(tmp, entry.FileOfs)
+		buf.Write(tmp)
 	}
 
 	// Write path strings

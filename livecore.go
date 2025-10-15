@@ -322,11 +322,28 @@ func runLivecore(config *Config) error {
 		log.Println("Phase 4: Generate ELF core file")
 	}
 
+	// Build file table from VMAs (for NT_FILE note)
+	var fileTable []elfcore.FileEntry
+	for _, vma := range finalVMAs {
+		// Only include file-backed mappings
+		if vma.Path != "" && vma.Inode != 0 {
+			fileTable = append(fileTable, elfcore.FileEntry{
+				Start:   vma.Start,
+				End:     vma.End,
+				FileOfs: vma.Offset,
+				Dev:     vma.Dev,
+				Inode:   vma.Inode,
+				Path:    vma.Path,
+			})
+		}
+	}
+
 	// Create core info
 	coreInfo := &elfcore.CoreInfo{
-		Pid:     config.Pid,
-		Threads: convertThreads(frozenThreads),
-		VMAs:    convertVMAs(finalVMAs),
+		Pid:       config.Pid,
+		Threads:   convertThreads(frozenThreads),
+		VMAs:      convertVMAs(finalVMAs),
+		FileTable: fileTable,
 	}
 
 	// Create notes

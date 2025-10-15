@@ -175,6 +175,7 @@ func parseMapsLine(line string) (VMA, error) {
 	// 2. Special kernel regions that can't be read via process_vm_readv
 	isZero := perms == "---p" ||
 		strings.Contains(path, "[vvar]") ||
+		strings.Contains(path, "[vvar_vclock]") ||
 		strings.Contains(path, "[vdso]") ||
 		strings.Contains(path, "[vsyscall]")
 

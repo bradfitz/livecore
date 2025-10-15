@@ -20,8 +20,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Note: Old temp file management removed - now using BufferManager
-
 // Config holds the configuration for livecore
 type Config struct {
 	Pid            int

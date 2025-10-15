@@ -139,39 +139,41 @@ func CreateCoreNotes(pid int, threads []Thread, fileTable []FileEntry) ([]Note, 
 
 // createPRStatusNote creates a NT_PRSTATUS note
 func createPRStatusNote(thread Thread) Note {
-	// prstatus_t structure for x86-64 (352 bytes total):
-	// - pr_info (elf_siginfo_t): 16 bytes
-	// - pr_cursig (short): 2 bytes
-	// - pr_sigpend (unsigned long): 8 bytes
-	// - pr_sighold (unsigned long): 8 bytes
-	// - pr_pid (pid_t): 4 bytes
-	// - pr_ppid (pid_t): 4 bytes
-	// - pr_pgrp (pid_t): 4 bytes
-	// - pr_sid (pid_t): 4 bytes
-	// - pr_utime (timeval): 16 bytes
-	// - pr_stime (timeval): 16 bytes
-	// - pr_cutime (timeval): 16 bytes
-	// - pr_cstime (timeval): 16 bytes
-	// - pr_reg (pt_regs): 216 bytes (27 x86-64 general purpose registers)
-	// - pr_fpvalid (unsigned long): 8 bytes
+	// prstatus_t structure for x86-64 (336 bytes total):
+	// Verified with actual Linux kernel offsetof() output:
+	// - pr_info (elf_siginfo_t): 12 bytes (offset 0)
+	// - pr_cursig (short): 2 bytes (offset 12)
+	// - padding: 2 bytes
+	// - pr_sigpend (unsigned long): 8 bytes (offset 16)
+	// - pr_sighold (unsigned long): 8 bytes (offset 24)
+	// - pr_pid (pid_t): 4 bytes (offset 32)
+	// - pr_ppid (pid_t): 4 bytes (offset 36)
+	// - pr_pgrp (pid_t): 4 bytes (offset 40)
+	// - pr_sid (pid_t): 4 bytes (offset 44)
+	// - pr_utime (timeval): 16 bytes (offset 48)
+	// - pr_stime (timeval): 16 bytes (offset 64)
+	// - pr_cutime (timeval): 16 bytes (offset 80)
+	// - pr_cstime (timeval): 16 bytes (offset 96)
+	// - pr_reg (elf_gregset_t): 216 bytes (offset 112)
+	// - pr_fpvalid (int): 4 bytes (offset 328)
 
-	prstatus := make([]byte, 352)
+	prstatus := make([]byte, 336)
 
 	// Fill signal info with zeros (we're not capturing signal state)
-	// Offset 0-33: pr_info, pr_cursig, pr_sigpend, pr_sighold (34 bytes)
+	// Offsets 0-31: pr_info, pr_cursig, padding, pr_sigpend, pr_sighold
 
-	// Set pr_pid (thread ID) at offset 34
-	binary.LittleEndian.PutUint32(prstatus[34:38], uint32(thread.Tid))
+	// Set pr_pid (thread ID) at offset 32
+	binary.LittleEndian.PutUint32(prstatus[32:36], uint32(thread.Tid))
 
-	// Leave pr_ppid, pr_pgrp, pr_sid as zeros (offsets 38-50)
+	// Leave pr_ppid, pr_pgrp, pr_sid as zeros (offsets 36-48)
 
-	// Leave timing info as zeros (offsets 50-114)
+	// Leave timing info as zeros (offsets 48-112)
 
-	// Copy register data starting at offset 114 (pr_reg field)
+	// Copy register data starting at offset 112 (pr_reg field)
 	// The registers from the thread should be in the correct format already
 	if len(thread.Registers) > 0 {
-		regOffset := 114
-		regSize := 216 // Size of pt_regs on x86-64
+		regOffset := 112
+		regSize := 216 // Size of elf_gregset_t on x86-64
 
 		// Copy as much register data as we have, up to regSize
 		copyLen := len(thread.Registers)
@@ -181,7 +183,7 @@ func createPRStatusNote(thread Thread) Note {
 		copy(prstatus[regOffset:regOffset+copyLen], thread.Registers)
 	}
 
-	// pr_fpvalid at offset 330 (8 bytes) - set to 0 (no FPU info in this note)
+	// pr_fpvalid at offset 328 (4 bytes) - set to 0 (no FPU info in this note)
 	// Already zero from make()
 
 	return Note{

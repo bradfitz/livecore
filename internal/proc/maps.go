@@ -46,6 +46,7 @@ type VMA struct {
 	Path    string
 	Kind    VMAKind
 	VmFlags []VMFlag // Memory advice flags from smaps
+	IsZero  bool     // True if this VMA should be zero-filled (no permissions)
 	// Internal fields for tracking
 	FileOffset uint64 // Offset in core file
 	MemSize    uint64 // Size in core file
@@ -169,6 +170,14 @@ func parseMapsLine(line string) (VMA, error) {
 	// Determine VMA kind
 	kind := determineVMAKind(path, uintptr(start), uintptr(end))
 
+	// Check if this VMA should be zero-filled:
+	// 1. No permissions (---p)
+	// 2. Special kernel regions that can't be read via process_vm_readv
+	isZero := perms == "---p" ||
+		strings.Contains(path, "[vvar]") ||
+		strings.Contains(path, "[vdso]") ||
+		strings.Contains(path, "[vsyscall]")
+
 	return VMA{
 		Start:   uintptr(start),
 		End:     uintptr(end),
@@ -178,6 +187,7 @@ func parseMapsLine(line string) (VMA, error) {
 		Inode:   inode,
 		Path:    path,
 		Kind:    kind,
+		IsZero:  isZero,
 		MemSize: uint64(end - start),
 	}, nil
 }

@@ -474,10 +474,11 @@ func convertVMAsToCopy(vmas []proc.VMA) []copy.VMA {
 	var result []copy.VMA
 	for _, vma := range vmas {
 		result = append(result, copy.VMA{
-			Start: vma.Start,
-			End:   vma.End,
-			Size:  vma.MemSize,
-			Perms: copy.Perm(vma.Perms),
+			Start:  vma.Start,
+			End:    vma.End,
+			Size:   vma.MemSize,
+			Perms:  copy.Perm(vma.Perms),
+			IsZero: vma.IsZero,
 		})
 	}
 	return result
@@ -496,6 +497,7 @@ func convertVMAs(vmas []proc.VMA) []elfcore.VMA {
 			Inode:      vma.Inode,
 			Path:       vma.Path,
 			Kind:       elfcore.VMAKind(vma.Kind),
+			IsZero:     vma.IsZero,
 			FileOffset: vma.FileOffset,
 			MemSize:    vma.MemSize,
 		})

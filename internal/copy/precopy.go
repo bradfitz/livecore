@@ -182,10 +182,11 @@ func (pm *PageMap) CalculateDirtyRatio(vmas []VMA) (float64, error) {
 
 // VMA represents a virtual memory area
 type VMA struct {
-	Start uintptr
-	End   uintptr
-	Size  uint64
-	Perms Perm
+	Start  uintptr
+	End    uintptr
+	Size   uint64
+	Perms  Perm
+	IsZero bool // True if this VMA should be zero-filled (no permissions)
 	// Add other fields as needed
 }
 
@@ -331,18 +332,18 @@ func (pce *PreCopyEngine) copyVMA(vma VMA) error {
 		return fmt.Errorf("failed to get mmap pointer: %w", err)
 	}
 
+	// Handle zero VMAs (no permissions) - skip process_vm_readv
+	if vma.IsZero {
+		// Just allocate space in buffer manager to create a hole in the output file
+		// No need to actually write zeros - the file will be sparse
+		return nil
+	}
+
 	// Copy the entire VMA in one ProcessVMReadv call
 	vmaSize := end - start
 	err = CopyMemoryToMmap(pce.pid, uintptr(start), vmaSize, mmapPtr)
 	if err != nil {
-		// Skip pages that can't be read (like vsyscall, etc.)
-		if err == unix.ENOENT || err == unix.EFAULT {
-			// Fill with zeros for unreadable pages
-			if pce.verbose {
-				log.Printf("Skipping unreadable VMA %x-%x: %v", vma.Start, vma.End, err)
-			}
-			return nil
-		}
+		// For readable VMAs, process_vm_readv failures are fatal
 		return fmt.Errorf("failed to read VMA %x-%x: %w", vma.Start, vma.End, err)
 	}
 

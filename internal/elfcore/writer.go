@@ -292,6 +292,16 @@ func (w *ELFWriter) writeLoadSegments(segments []LoadSegment) error {
 
 // writeLoadSegment writes a single PT_LOAD segment
 func (w *ELFWriter) writeLoadSegment(segment LoadSegment) error {
+	// Handle zero VMAs by creating sparse files with ftruncate
+	if segment.VMA.IsZero {
+		// For zero VMAs, just extend the file to create a sparse region
+		// This is much more efficient than writing zeros
+		if err := w.file.Truncate(int64(segment.Offset + segment.VMA.Size())); err != nil {
+			return fmt.Errorf("failed to create sparse region for zero VMA %x-%x: %w", segment.VMA.Start, segment.VMA.End, err)
+		}
+		return nil
+	}
+
 	// Get the offset for this VMA in the BufferManager (only if it exists)
 	tmpOffset, ok := w.bufferManager.GetExistingOffsetForVMA(uint64(segment.VMA.Start), segment.VMA.Size())
 	if !ok {

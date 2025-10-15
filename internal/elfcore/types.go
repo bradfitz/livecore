@@ -42,6 +42,7 @@ type VMA struct {
 	Path    string
 	Kind    VMAKind
 	VmFlags []VMFlag // Memory advice flags from smaps
+	IsZero  bool     // True if this VMA should be zero-filled (no permissions)
 	// Internal fields for tracking
 	FileOffset uint64 // Offset in core file
 	MemSize    uint64 // Size in core file

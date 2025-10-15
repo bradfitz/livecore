@@ -96,31 +96,30 @@ func (w *ELFWriter) writeNote(note Note, offset *uint64) error {
 func CreateCoreNotes(pid int, threads []Thread, fileTable []FileEntry) ([]Note, error) {
 	var notes []Note
 
-	// NT_PRPSINFO (first, only once)
+	// NT_PRSTATUS for each thread
+	for _, thread := range threads {
+		prstatus := createPRStatusNote(thread)
+		notes = append(notes, prstatus)
+	}
+
+	// NT_FPREGSET for each thread
+	for _, thread := range threads {
+		fpregset := createFPRegsetNote(thread)
+		notes = append(notes, fpregset)
+	}
+
+	// NT_XSTATE for each thread
+	for _, thread := range threads {
+		xstate := createXStateNote(thread)
+		notes = append(notes, xstate)
+	}
+
+	// NT_PRPSINFO
 	prpsinfo, err := createPRPSInfoNote(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PRPSINFO note: %w", err)
 	}
 	notes = append(notes, prpsinfo)
-
-	// Per-thread notes in gcore order: PRSTATUS, FPREGSET, XSTATE, SIGINFO
-	for _, thread := range threads {
-		// NT_PRSTATUS
-		prstatus := createPRStatusNote(thread)
-		notes = append(notes, prstatus)
-
-		// NT_FPREGSET
-		fpregset := createFPRegsetNote(thread)
-		notes = append(notes, fpregset)
-
-		// NT_XSTATE
-		xstate := createXStateNote(thread)
-		notes = append(notes, xstate)
-
-		// NT_SIGINFO
-		siginfo := createSigInfoNote(thread)
-		notes = append(notes, siginfo)
-	}
 
 	// NT_AUXV
 	auxv, err := createAuxvNote(pid)
@@ -211,30 +210,16 @@ func createFPRegsetNote(thread Thread) Note {
 
 // createXStateNote creates a NT_XSTATE note
 func createXStateNote(thread Thread) Note {
-	// XSAVE state - must match gcore size (0xa88 = 2696 bytes)
-	// This includes AVX, AVX-512, and other extended state
-	xstate := make([]byte, 0xa88)
+	// XSAVE state - variable size
+	xstate := make([]byte, 1024) // Simplified size
 
 	// NOTE(bradfitz): don't really care for gorefs (grf) purposes, as these can't
 	// contain pointers, IIUC.
 
 	return Note{
-		Name: "LINUX", // gcore uses "LINUX" for NT_X86_XSTATE
+		Name: "CORE",
 		Type: NT_XSTATE,
 		Data: xstate,
-	}
-}
-
-// createSigInfoNote creates a NT_SIGINFO note
-func createSigInfoNote(thread Thread) Note {
-	// siginfo_t structure - 128 bytes (0x80)
-	// We don't have signal information for live processes, so zero it
-	siginfo := make([]byte, 0x80)
-
-	return Note{
-		Name: "CORE",
-		Type: NT_SIGINFO,
-		Data: siginfo,
 	}
 }
 
